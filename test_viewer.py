@@ -725,8 +725,8 @@ class CategoryTest(unittest.TestCase):
         self.assertTrue(all(c["about"] for c in v.CATALOG))
 
     def test_listed_skills_ignore_keyword_guesses(self):
-        # 'review' would otherwise pull ui-audit into 리뷰·품질; the list wins, with or without a plugin prefix
-        self.assertEqual(v.categorize("ui-audit", "audit the UI"), "UI·디자인")
+        # the 'ponytail' keyword would otherwise file ponytail-gain under 개발·테스트; the list wins, with or without a plugin prefix
+        self.assertEqual(v.categorize("ponytail-gain", ""), "리뷰·품질")
         self.assertEqual(v.categorize("superpowers:requesting-code-review", ""), "리뷰·품질")
         self.assertEqual(v.categorize("zz-helper", "Review pull requests for bugs"), "리뷰·품질")  # unknown: keywords
         self.assertEqual(v.categorize("zzz", "nothing matches here"), v.OTHER)
