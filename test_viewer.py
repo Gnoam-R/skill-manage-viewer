@@ -18,6 +18,7 @@ from unittest import mock
 
 from PIL import ImageGrab
 
+import install
 import platform_support as plat
 import skill_manager as mgr
 import skill_viewer as v
@@ -137,6 +138,11 @@ class PanelTest(unittest.TestCase):
         app.events.put("toggle")
         app._pump()
         self.assertTrue(app.visible and app.root.state() == "normal")
+
+    def test_app_name_is_the_same_everywhere(self):
+        app = self.app
+        self.assertEqual(app.root.title(), install.APP_NAME)  # window title = Start menu / Spotlight name
+        self.assertIn(install.APP_NAME, texts(app.root))  # header
 
     def test_02_origin_labels(self):
         legacy = find(self.app, "Codex", "legacy")

@@ -1,4 +1,4 @@
-"""Skill catalog panel: lists the skills each agent (Claude Code / Codex / Antigravity) can use, grouped by
+"""SkillDesk: lists the skills each agent (Claude Code / Codex / Antigravity) can use, grouped by
 category (category rail on the left, skills on the right), and installs / updates / edits / deletes them.
 Lives in an always-on-top corner window that is opened and closed from a tray icon.
 
@@ -217,7 +217,7 @@ def tray_menu(put):
 def tray_child() -> None:
     """macOS only: show the menu-bar icon and print the command of each click; exit when the app closes our stdin."""
     import pystray
-    icon = pystray.Icon("skill_viewer", icon_image(64), "스킬 카탈로그", tray_menu(lambda cmd: print(cmd, flush=True)))
+    icon = pystray.Icon("skill_viewer", icon_image(64), "SkillDesk", tray_menu(lambda cmd: print(cmd, flush=True)))
     threading.Thread(target=lambda: (sys.stdin.read(), icon.stop()), daemon=True).start()
     icon.run()
 
@@ -251,7 +251,7 @@ class App:
         plat.dpi_aware()
         load_bundled_fonts()  # before Tk starts listing fonts
         self.root = root = tk.Tk()
-        root.title("스킬 카탈로그")
+        root.title("SkillDesk")
         from PIL import ImageTk
         self._icon = ImageTk.PhotoImage(icon_image(64))  # keep a reference or Tk drops it
         root.iconphoto(True, self._icon)  # pyright: ignore[reportArgumentType]
@@ -384,7 +384,7 @@ class App:
         header.pack(fill="x")
         titles = tk.Frame(header, bg=c["surface"])
         titles.pack(side="left", padx=(18, 0), pady=(14, 12))
-        self._label(titles, "스킬 카탈로그", 16, bold=True).pack(anchor="w")
+        self._label(titles, "SkillDesk", 16, bold=True).pack(anchor="w")
         self.subtitle = self._label(titles, "", 10, fg=c["muted"])
         self.subtitle.pack(anchor="w")
         actions = tk.Frame(header, bg=c["surface"])
@@ -770,7 +770,7 @@ class App:
             return
         import pystray
         # tray callbacks run on pystray's thread; the Tk thread drains the queue
-        self.tray = pystray.Icon("skill_viewer", icon_image(64), "스킬 카탈로그", tray_menu(self.events.put))
+        self.tray = pystray.Icon("skill_viewer", icon_image(64), "SkillDesk", tray_menu(self.events.put))
         self.tray.run_detached()
 
     def _read_tray(self) -> None:

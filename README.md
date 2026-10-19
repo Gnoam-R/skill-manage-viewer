@@ -1,11 +1,11 @@
-# 스킬 카탈로그 (skill-manage-viewer)
+# SkillDesk
 
 [![CI](https://github.com/sgustjd2/skill-manage-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/sgustjd2/skill-manage-viewer/actions/workflows/ci.yml)
 
 내 PC에 설치된 **AI 에이전트 스킬**(Claude Code · Codex · Antigravity)을 한 화면에서 보고, 설치·업데이트·수정·삭제까지 하는 **Windows·macOS** 프로그램입니다.
 작은 창이 화면 모서리에 떠 있고, 트레이(macOS는 메뉴 막대) 아이콘으로 열고 닫습니다.
 
-![스킬 카탈로그 기본 화면](docs/images/main.png)
+![SkillDesk 기본 화면](docs/images/main.png)
 
 > 스크린샷은 Windows에서 예시 스킬로 찍은 것입니다. macOS도 화면 구성은 같습니다.
 
@@ -57,7 +57,7 @@ python3 install.py
 ```
 
 1. `start.bat` / `start.command`: 필요한 패키지가 없으면 설치하고 앱을 띄웁니다.
-2. `install.py`: 앞으로 **시작 메뉴(Windows) / Spotlight(macOS)** 에서 `스킬 카탈로그` 또는 `Skill Catalog`로 검색해 켤 수 있게 등록합니다.
+2. `install.py`: 앞으로 **시작 메뉴(Windows) / Spotlight(macOS)** 에서 `SkillDesk`로 검색해 켤 수 있게 등록합니다.
 
 ## 자세한 설치 방법
 
@@ -119,8 +119,8 @@ python install.py          # macOS는 python3 install.py
 
 | | 검색하는 곳 | 검색어 | 만들어지는 것 |
 |---|---|---|---|
-| Windows | 시작 메뉴 | `스킬 카탈로그` 또는 `Skill Catalog` | 시작 메뉴 바로 가기 |
-| macOS | Spotlight (`⌘ + Space`) | `스킬 카탈로그` 또는 `Skill Catalog` | `~/Applications/스킬 카탈로그 (Skill Catalog).app` |
+| Windows | 시작 메뉴 | `SkillDesk` (또는 `skill`) | 시작 메뉴 바로 가기 |
+| macOS | Spotlight (`⌘ + Space`) | `SkillDesk` (또는 `skill`) | `~/Applications/SkillDesk.app` |
 
 추가 옵션:
 

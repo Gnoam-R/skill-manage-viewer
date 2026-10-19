@@ -117,7 +117,7 @@ def register_font(path: Path) -> bool:
 _lock_file = None  # keeps the lock for the life of the process
 
 
-def already_running(name: str = "skill-catalog") -> bool:
+def already_running(name: str = "skilldesk") -> bool:
     """True if another copy of the app holds the lock. The OS drops the lock when that process dies."""
     global _lock_file
     f = open(Path(tempfile.gettempdir()) / f"{name}.lock", "a+b")  # noqa: SIM115 - must stay open

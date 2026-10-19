@@ -22,9 +22,9 @@ class MacBundle(unittest.TestCase):
             py = Path("/usr/local/bin/python3")  # str(py) uses backslashes when this runs on Windows
             made = install.install_mac(t / "Applications", t / "LaunchAgents", True, py)
             app = made[0]
-            self.assertEqual(app.name, "스킬 카탈로그 (Skill Catalog).app")
+            self.assertEqual(app.name, "SkillDesk.app")
             info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
-            self.assertEqual((info["CFBundleExecutable"], info["CFBundleDisplayName"]), ("launcher", "스킬 카탈로그"))
+            self.assertEqual((info["CFBundleExecutable"], info["CFBundleDisplayName"]), ("launcher", "SkillDesk"))
             launcher = (app / "Contents/MacOS/launcher").read_text(encoding="utf-8")
             self.assertTrue(launcher.startswith("#!/bin/bash\n"))
             self.assertIn(f'cd "{install.HERE}"', launcher)
@@ -71,7 +71,7 @@ class WindowsShortcut(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             programs = Path(t) / "Programs"
             made = install.install_windows(programs, True, Path(sys.executable))
-            self.assertEqual([p.name for p in made], ["스킬 카탈로그 (Skill Catalog).lnk"] * 2)
+            self.assertEqual([p.name for p in made], ["SkillDesk.lnk"] * 2)
             menu, startup = (self.read(p) for p in made)
             self.assertTrue(menu["TargetPath"].lower().endswith("pythonw.exe"))  # no console window
             self.assertEqual(menu["Arguments"], f'"{install.HERE / "skill_viewer.py"}"')
@@ -85,9 +85,9 @@ class WindowsShortcut(unittest.TestCase):
     def test_cli_with_dest(self):
         with tempfile.TemporaryDirectory() as t:
             self.assertEqual(install.main(["--dest", t]), 0)
-            self.assertTrue((Path(t) / "스킬 카탈로그 (Skill Catalog).lnk").is_file())
+            self.assertTrue((Path(t) / "SkillDesk.lnk").is_file())
             self.assertEqual(install.main(["--dest", t, "--uninstall"]), 0)
-            self.assertFalse((Path(t) / "스킬 카탈로그 (Skill Catalog).lnk").exists())
+            self.assertFalse((Path(t) / "SkillDesk.lnk").exists())
 
 
 if __name__ == "__main__":

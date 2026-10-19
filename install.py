@@ -5,7 +5,7 @@
   python install.py --uninstall  remove what this script created
   python install.py --dest DIR   write the shortcut / app into DIR instead (for testing)
 
-Search for "스킬 카탈로그" or "Skill Catalog". Nothing is copied: the entries point at this folder, so keep it where it is.
+Search for "SkillDesk". Nothing is copied: the entries point at this folder, so keep it where it is.
 """
 
 import argparse
@@ -21,7 +21,7 @@ from pathlib import Path
 import platform_support as plat
 
 HERE = Path(__file__).resolve().parent
-APP_NAME = "스킬 카탈로그 (Skill Catalog)"
+APP_NAME = "SkillDesk"
 BUNDLE_ID = "io.github.sgustjd2.skill-manage-viewer"
 MARKER = "# created by skill-manage-viewer install.py"  # only bundles carrying this are ever removed
 
@@ -33,10 +33,10 @@ def _ps_quote(text: str) -> str:
 def make_shortcut(lnk: Path, python: Path, args: str) -> None:
     """Windows .lnk via the WScript.Shell COM object (no extra packages).
 
-    WScript.Shell saves through the ANSI code page, so on a non-Korean Windows the Korean file name becomes '??' and
-    saving fails. It writes an ASCII-named file, which Python then renames.
+    WScript.Shell saves through the ANSI code page, so a path with characters outside it (a Korean user name on an
+    English Windows) fails. It writes an ASCII-named file next to the target, which Python then renames.
     """
-    ascii_lnk = lnk.with_name(f"skill-catalog-{os.getpid()}.lnk")
+    ascii_lnk = lnk.with_name(f"skilldesk-{os.getpid()}.lnk")
     script = "\n".join(
         [
             f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({_ps_quote(str(ascii_lnk))})",
@@ -44,7 +44,7 @@ def make_shortcut(lnk: Path, python: Path, args: str) -> None:
             f"$s.Arguments = {_ps_quote(args)}",
             f"$s.WorkingDirectory = {_ps_quote(str(HERE))}",
             f"$s.IconLocation = {_ps_quote(str(HERE / 'skill_viewer.ico'))}",
-            "$s.Description = 'Skill Catalog'",
+            "$s.Description = 'SkillDesk'",
             "$s.Save()",
         ]
     )
@@ -81,8 +81,8 @@ def install_mac(apps: Path, launch_agents: Path | None, startup: bool, python: P
     (app / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
     (app / "Contents/Resources").mkdir(parents=True, exist_ok=True)
     plist = {
-        "CFBundleName": "Skill Catalog",
-        "CFBundleDisplayName": "스킬 카탈로그",
+        "CFBundleName": "SkillDesk",
+        "CFBundleDisplayName": "SkillDesk",
         "CFBundleIdentifier": BUNDLE_ID,
         "CFBundleExecutable": "launcher",
         "CFBundleIconFile": "AppIcon",
@@ -160,7 +160,7 @@ def main(argv: list[str]) -> int:
         )
     for p in made:
         print("created", p)
-    print('이제 검색창(Windows 시작 / macOS Spotlight)에 "스킬 카탈로그" 또는 "Skill Catalog"를 입력하세요.')
+    print('이제 검색창(Windows 시작 / macOS Spotlight)에 "SkillDesk"를 입력하세요.')
     return 0
 
 
