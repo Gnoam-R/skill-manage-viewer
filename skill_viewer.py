@@ -1,6 +1,6 @@
 """SkillDesk: lists the skills each agent (Claude Code / Codex / Antigravity) can use, grouped by
 category (category rail on the left, skills on the right), and installs / updates / edits / deletes them.
-Lives in an always-on-top corner window that is opened and closed from a tray icon.
+Lives in a corner window that is opened and closed from a tray icon.
 
   pythonw skill_viewer.py            start (window visible; minimize or close hides it to the tray)
   pythonw skill_viewer.py --hidden   start in the tray only
@@ -255,7 +255,6 @@ class App:
         from PIL import ImageTk
         self._icon = ImageTk.PhotoImage(icon_image(64))  # keep a reference or Tk drops it
         root.iconphoto(True, self._icon)  # pyright: ignore[reportArgumentType]
-        root.attributes("-topmost", True)
         root.resizable(False, True)  # no maximize; minimize and close stay
         self.family = FONT if FONT in tkfont.families(root) else FALLBACK_FONT
         self.scale = plat.pixel_scale(root)
@@ -736,7 +735,8 @@ class App:
         self.place()
         self.root.deiconify()
         self.root.lift()
-        self.root.attributes("-topmost", True)
+        self.root.attributes("-topmost", True)  # Windows often refuses a plain lift() from the tray; pop to the front once...
+        self.root.attributes("-topmost", False)  # ...then behave like a normal window (clicking another app puts it behind)
         self.visible = True
         self.load()
 
@@ -808,8 +808,7 @@ class AddDialog:
         self.win = win = tk.Toplevel(app.root)
         win.title("스킬 추가")
         win.configure(bg=c["bg"])
-        win.transient(app.root)
-        win.attributes("-topmost", True)
+        win.transient(app.root)  # stays above the panel without being topmost
         w, h = app.px(self.W), min(app.px(self.H), win.winfo_screenheight() - 80)
         rx, ry = app.root.winfo_x(), app.root.winfo_y()
         x = rx - w - 12 if rx > w + 24 else rx + app.root.winfo_width() + 12  # beside the panel, not over it
