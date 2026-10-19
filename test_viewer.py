@@ -12,6 +12,7 @@ import tempfile
 import time
 import tkinter as tk
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import font as tkfont
 from unittest import mock
@@ -49,6 +50,11 @@ def open_menu(app, s, x, y):
     app.root.update()
 
 
+def usage_line(tid: str, skill: str, when) -> str:
+    block = {"type": "tool_use", "id": tid, "name": "Skill", "input": {"skill": skill}}
+    return json.dumps({"type": "assistant", "timestamp": when.isoformat(), "message": {"content": [block]}}, separators=(",", ":"))
+
+
 def find(app: v.App, agent: str, name: str) -> dict | None:
     return next((s for s in app.data[agent] if s["name"] == name), None)
 
@@ -62,6 +68,7 @@ class PanelTest(unittest.TestCase):
             mock.patch.object(mgr, "STORE", t / "store"),
             mock.patch.object(mgr, "AGENT_DIRS", {"Claude Code": t / "claude", "Codex": t / "codex", "Antigravity": t / "agy"}),
             mock.patch.object(mgr, "UPDATER", t / "updater.ps1"),
+            mock.patch.object(mgr, "CLAUDE_HOME", t / "claudehome"),  # no real plugins, and the usage logs below
             mock.patch.object(mgr, "open_in_editor"),
         ]
         for p in cls._patches:
@@ -70,6 +77,18 @@ class PanelTest(unittest.TestCase):
         # so the Claude tab has several categories and a read-only skill even on a clean CI machine without plugins
         write_skill(t / "claude/tdd")
         write_skill(t / "claude/synced/app/grilling")  # nested = synced by the desktop app = view only
+        # Claude Code logs: tdd 3x and gitskill 1x this month, tdd 1x last month, plus a built-in command
+        now = datetime.now().astimezone()
+        cls.this_month, last = now.strftime("%Y-%m"), now.replace(day=1) - timedelta(days=2)
+        cls.last_month = last.strftime("%Y-%m")
+        lines = [usage_line(f"t{i}", "tdd", now) for i in range(3)] + [usage_line("g1", "gitskill", now), usage_line("old", "tdd", last)]
+        lines.append(
+            json.dumps(
+                {"type": "user", "timestamp": now.isoformat(), "uuid": "u1", "message": {"content": "<command-name>/clear</command-name>"}}
+            )
+        )
+        (t / "claudehome/projects/p").mkdir(parents=True)
+        (t / "claudehome/projects/p/s.jsonl").write_text("".join(line + "\n" for line in lines), encoding="utf-8")
         cls.repo = t / "gitrepo"  # a git-backed skill linked into Claude Code
         write_skill(cls.repo / "skills/gitskill")
         git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
@@ -267,7 +286,8 @@ class PanelTest(unittest.TestCase):
         app.set_agent("Claude Code")
         app.query.set("")
         names = texts(app.rail)
-        self.assertEqual((names[1], names[3]), (v.STAR, "전체"))  # the star entry sits above "전체", and shows at 0
+        # the star entry is first and shows at 0; on the Claude Code tab the usage entry sits between it and "전체"
+        self.assertEqual((names[1], names[3], names[5]), (v.STAR, v.USAGE, "전체"))
         self.assertEqual(names[2], "0")
         gs = find(app, "Claude Code", "gitskill")
         self.assertIn("★ 자주 쓰는 스킬에 추가", [label for label, _, _ in app.menu_items(gs)])
@@ -302,6 +322,36 @@ class PanelTest(unittest.TestCase):
         self.assertIn("gitskill", app.pins["Claude Code"])
         icon.event_generate("<Button-1>", x=2, y=2)  # a second click takes it back
         self.assertEqual(icon.cget("text"), "☆")
+
+    def test_03g_most_used_skills_by_month(self):
+        app = self.app
+        app.set_agent("Claude Code")
+        app.pick(v.USAGE)
+        self.settle(lambda: app.usage is not None)
+        self.assertEqual([s["name"] for s in app.shown], ["tdd", "gitskill"])  # most called first; /clear is not a skill
+        self.assertEqual((app.calls["tdd"], app.calls["gitskill"]), (3, 1))
+        shown = texts(app.body)
+        self.assertIn("3회", shown)
+        self.assertIn(v.month_label(self.this_month), shown)  # the month picker
+        rail = texts(app.rail)
+        self.assertEqual(rail[rail.index(v.USAGE) + 1], "2")  # two skills were used this month
+        self.shot(app.root, "t3g_usage")
+        bad = low_contrast(app, app.root, "usage light")
+        app.set_usage_month(self.last_month)
+        self.assertEqual([(s["name"], app.calls[s["name"]]) for s in app.shown], [("tdd", 1)])
+        app.set_usage_month(v.usage.ALL)
+        self.assertEqual(app.calls["tdd"], 4)
+        app.toggle_theme()
+        app.pick(v.USAGE)
+        self.settle(lambda: app.shown)
+        bad += low_contrast(app, app.root, "usage dark")
+        app.toggle_theme()
+        self.assertEqual(bad, [])
+        app.set_usage_month(self.this_month)
+        app.set_agent("Codex")  # only Claude Code's logs are read, so other agents have no such entry
+        self.assertNotIn(v.USAGE, texts(app.rail))
+        self.assertIsNone(app.cat)
+        app.set_agent("Claude Code")
 
     def test_04_menu_entries(self):
         app = self.app
