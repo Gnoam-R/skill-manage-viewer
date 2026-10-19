@@ -88,6 +88,7 @@ def bounds(win) -> tuple[int, int, int, int]:
 
 def shot(win, name: str) -> None:
     from PIL import ImageGrab
+    win.attributes("-topmost", True)  # the app no longer stays on top by itself; nothing may cover it while it is grabbed
     for _ in range(3):
         win.update()
         time.sleep(0.4)  # let the window finish fading in

@@ -139,6 +139,16 @@ class PanelTest(unittest.TestCase):
         app._pump()
         self.assertTrue(app.visible and app.root.state() == "normal")
 
+    def test_01c_window_is_not_always_on_top(self):
+        app = self.app
+        app.show()  # opening from the tray pops to the front once, then must not stay topmost
+        app.root.update()
+        self.assertFalse(app.root.attributes("-topmost"))
+        app.add_dialog()
+        app.dialog.win.update()
+        self.assertFalse(app.dialog.win.attributes("-topmost"))
+        app.dialog.close()
+
     def test_app_name_is_the_same_everywhere(self):
         app = self.app
         self.assertEqual(app.root.title(), install.APP_NAME)  # window title = Start menu / Spotlight name
