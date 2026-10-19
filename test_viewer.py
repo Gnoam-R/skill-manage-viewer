@@ -350,6 +350,109 @@ class PanelTest(unittest.TestCase):
         self.assertEqual((regular.actual("family"), regular.actual("weight")), ("Pretendard", "normal"))
         self.assertEqual((app.name_font.actual("family"), app.name_font.actual("weight")), ("Pretendard", "bold"))
 
+    def test_14_text_is_readable_on_its_background_in_both_themes(self):
+        """WCAG contrast for every text/background pair actually on screen, including hover, selected and disabled."""
+        app = self.app
+        pack = self.tmp / "contrast-pack"
+        for n in ("ca", "cb"):
+            write_skill(pack / n)
+        bad = []
+        for _ in range(2):  # light, then dark
+            app.set_agent("Claude Code")
+            app.pick(None)
+            bad += low_contrast(app, app.root, app.theme)
+            app.pick(sorted({s["cat"] for s in app.shown})[0])  # a selected rail row
+            bad += low_contrast(app, app.root, app.theme + " picked")
+            for w in walk(app.root):  # hover states: header buttons, rows, rail
+                if isinstance(w, tk.Label) and str(w.cget("cursor")) == "hand2":
+                    w.event_generate("<Enter>")
+                    bad += low_contrast(app, w.master, app.theme + " hover")
+                    w.event_generate("<Leave>")
+            for s in (app.shown[0], next(s for s in app.data["Claude Code"] if not s["managed"])):
+                bad += low_contrast(app, app.build_menu(s), app.theme + " menu")
+            app.add_dialog()
+            dlg = app.dialog
+            bad += low_contrast(app, dlg.win, app.theme + " dialog, install disabled")
+            dlg._show_found(mgr.discover(pack))
+            bad += low_contrast(app, dlg.win, app.theme + " dialog, install enabled")
+            dlg.show("새로 만들기")
+            bad += low_contrast(app, dlg.win, app.theme + " dialog, new")
+            dlg.close()
+            app.toggle_theme()
+        self.maxDiff = None
+        self.assertEqual(bad, [])
+
+
+def rgb(app, color):
+    return [x / 65535 for x in app.root.winfo_rgb(color)]
+
+
+def contrast(app, a, b):
+    def lum(color):
+        lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb(app, color)]
+        return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def low_contrast(app, top, where):
+    """-> 'where: widget text fg/bg ratio' for every pair below WCAG AA (4.5, or 3 for large or disabled text)."""
+    out = []
+    for w in walk(top):
+        pairs = []
+        try:
+            font = tkfont.Font(root=app.root, font=w.cget("font"))
+        except tk.TclError:
+            continue  # no text on this widget
+        large = font.actual("size") >= 18 or (font.actual("size") >= 14 and font.actual("weight") == "bold")
+        need = 3.0 if large else 4.5
+        if isinstance(w, tk.Menu):
+            pairs = [
+                ("fg", w.cget("fg"), w.cget("bg"), need),
+                ("active", w.cget("activeforeground"), w.cget("activebackground"), need),
+                ("disabled", w.cget("disabledforeground"), w.cget("bg"), 3.0),
+            ]
+        elif isinstance(w, tk.Button):
+            if str(w.cget("state")) == "disabled":
+                pairs = [("disabled", w.cget("disabledforeground"), w.cget("bg"), 3.0)]
+            else:
+                pairs = [("fg", w.cget("fg"), w.cget("bg"), need), ("active", w.cget("activeforeground"), w.cget("activebackground"), need)]
+        elif isinstance(w, (tk.Label, tk.Checkbutton, tk.Entry)):
+            pairs = [("fg", w.cget("fg"), w.cget("bg"), need)]
+            if isinstance(w, tk.Checkbutton):
+                pairs.append(("check", w.cget("fg"), w.cget("selectcolor"), 3.0))
+        for kind, fg, bg, limit in pairs:
+            r = contrast(app, fg, bg)
+            if r < limit:
+                text = w.cget("text") if "text" in w.keys() else w.winfo_class()  # noqa: SIM118 - Tk widgets have keys() but no __contains__
+                out.append(f"{where}: {str(text)[:20]!r} {kind} {fg} on {bg} = {r:.2f} < {limit}")
+    return out
+
+
+class CategoryTest(unittest.TestCase):
+    def test_every_skill_is_in_exactly_one_category(self):
+        listed = [s for c in v.CATALOG for s in c["skills"]]
+        dupes = sorted({s for s in listed if listed.count(s) > 1})
+        self.assertEqual(dupes, [], "a skill is listed under two categories")
+
+    def test_every_described_skill_has_a_category(self):
+        missing = sorted(n for n in v.NOTES if n not in v.CATEGORY_OF)
+        self.assertEqual(missing, [], "add these to skill_categories.json")
+
+    def test_categories_colors_and_descriptions_line_up(self):
+        names = [c["name"] for c in v.CATALOG]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(set(v.CAT_COLORS), set(names) | {v.OTHER})
+        self.assertTrue(all(c["about"] for c in v.CATALOG))
+
+    def test_listed_skills_ignore_keyword_guesses(self):
+        # 'review' would otherwise pull ui-audit into 리뷰·품질; the list wins, with or without a plugin prefix
+        self.assertEqual(v.categorize("ui-audit", "audit the UI"), "UI·디자인")
+        self.assertEqual(v.categorize("superpowers:requesting-code-review", ""), "리뷰·품질")
+        self.assertEqual(v.categorize("zz-helper", "Review pull requests for bugs"), "리뷰·품질")  # unknown: keywords
+        self.assertEqual(v.categorize("zzz", "nothing matches here"), v.OTHER)
+
 
 class DiscoveryTest(unittest.TestCase):
     """What happens on someone else's PC: other layouts, missing agents, broken files. No Tk needed."""

@@ -31,35 +31,27 @@ HERE = Path(__file__).parent
 HOME = Path.home()
 NOTES = json.loads((HERE / "skill_notes.json").read_text(encoding="utf-8"))
 
-# First match wins; the skill name is tried against every rule before its description is. Edit freely.
-CATEGORIES = [
-    ("코드 리뷰·보안", r"review|audit|critique|security|simplify"),
-    ("Git·사내 규칙", r"gitlab|commit|\bpr\b|git|worktree|branch"),
-    ("기획·검증", r"grill|brainstorm|plan|\bspec\b|interview"),
-    ("설계·아키텍처", r"architecture|codebase-design|domain-model"),
-    ("개발·테스트", r"tdd|test|debug|diagnos|verification|ponytail|lsp|pyright|reverse-engineer"),
-    ("UI·디자인", r"design|\bui\b|ux|brand|banner|slides|theme|frontend|impeccable|figma|canvas|styling|polish|dataviz"
-                 r"|visualiz|generative"),
-    ("문서·파일", r"docx|pdf|pptx|xlsx|\bdocs?\b|google-workspace|openai-docs"),
-    ("브라우저·자동화", r"browser|chrome|computer-use|playwright|schedule|loop|automation|mcp|workflow|agent|imagegen"),
-    ("스킬·설정 관리", r"skill|plugin|config|setup|keybind|init|customiz|claude-api|migrate|permission|morning|memory|antigravity"),
-    ("리서치", r"research|context7|explain"),
-]
+# Categories are mutually exclusive: every known skill is listed under exactly one of them in
+# skill_categories.json (checked by tests). The keywords there only place skills that file doesn't list yet,
+# trying the categories in file order, the skill name before its description.
+CATALOG = json.loads((HERE / "skill_categories.json").read_text(encoding="utf-8"))
+CATEGORIES = [(c["name"], c["keywords"]) for c in CATALOG]
+CATEGORY_OF = {skill: c["name"] for c in CATALOG for skill in c["skills"]}
 OTHER = "기타"
+ABOUT = {c["name"]: c["about"] for c in CATALOG} | {OTHER: "어느 카테고리에도 맞지 않는 스킬"}
 AGENTS = list(mgr.AGENT_DIRS)
 
 # Every category gets its own hue: (text on light, tint on light, text on dark, tint on dark).
 CAT_COLORS = {
-    "코드 리뷰·보안": ("#C0261D", "#FDE7E4", "#FF8A80", "#4A2220"),
-    "Git·사내 규칙": ("#C2410C", "#FFEBDD", "#FFA566", "#4A2D1A"),
-    "기획·검증": ("#A16207", "#FEF3C7", "#F5C451", "#463813"),
-    "설계·아키텍처": ("#15803D", "#DCF5E3", "#5FD38A", "#1B3D2A"),
-    "개발·테스트": ("#0F766E", "#D5F3EF", "#4FD1C5", "#173E3B"),
+    "기획·설계": ("#945A06", "#FEF3C7", "#F5C451", "#463813"),
+    "구현·테스트": ("#0E6E67", "#D5F3EF", "#4FD1C5", "#173E3B"),
+    "디버깅·검증": ("#137538", "#DCF5E3", "#5FD38A", "#1B3D2A"),
+    "리뷰·품질": ("#C0261D", "#FDE7E4", "#FF8A80", "#4A2220"),
+    "Git·협업": ("#B23B0B", "#FFEBDD", "#FFA566", "#4A2D1A"),
     "UI·디자인": ("#1D4ED8", "#E0E9FF", "#7FA8FF", "#1F3158"),
-    "문서·파일": ("#4338CA", "#E5E4FF", "#A5A0FF", "#2B2A5C"),
-    "브라우저·자동화": ("#7E22CE", "#F1E3FD", "#C99BFF", "#3B2358"),
-    "스킬·설정 관리": ("#BE185D", "#FCE4EF", "#FF8FBF", "#4D1F37"),
-    "리서치": ("#475569", "#E8ECF1", "#B6C2D0", "#2C3541"),
+    "문서·자료": ("#4338CA", "#E5E4FF", "#A5A0FF", "#2B2A5C"),
+    "자동화·브라우저": ("#7E22CE", "#F1E3FD", "#C99BFF", "#3B2358"),
+    "에이전트·스킬 설정": ("#BE185D", "#FCE4EF", "#FF8FBF", "#4D1F37"),
     OTHER: ("#52525B", "#ECECEF", "#C4C4CC", "#33333A"),
 }
 
@@ -73,6 +65,8 @@ DEFAULT_HINT = "클릭: 이름 복사 · ⋯ 또는 우클릭: 수정·삭제 ·
 
 # ---- data -------------------------------------------------------------------------------------
 def categorize(name: str, desc: str) -> str:
+    if cat := CATEGORY_OF.get(name) or CATEGORY_OF.get(name.split(":")[-1]):
+        return cat
     for text in (name.lower(), desc.lower()):
         for cat, rx in CATEGORIES:
             if re.search(rx, text):
@@ -311,6 +305,12 @@ class App:
                          highlightthickness=0 if primary else 1, highlightbackground=c["line"],
                          disabledforeground=c["muted"])
 
+    def _enable(self, button: tk.Button, on: bool) -> None:
+        """Tk keeps a disabled button's background, so grey text would sit on the accent blue; swap both."""
+        c = self.c
+        button.config(state="normal" if on else "disabled", bg=c["accent"] if on else c["line"],
+                      cursor="hand2" if on else "arrow")
+
     def _check(self, parent, text, var, bg=None, **kw):
         c = self.c
         bg = bg or c["bg"]
@@ -507,8 +507,11 @@ class App:
             name.pack(side="left", padx=(12, 4))
             chip = self._label(row, str(n), 10, bold=True, fg=fg, bg=c["surface"] if on else soft, padx=8)
             chip.pack(side="right", padx=12)
+            about = ABOUT.get(cat, "모든 카테고리의 스킬") if cat else "모든 카테고리의 스킬"
             for w in (row, bar, name, chip):
                 w.bind("<Button-1>", lambda e, cat=cat: self.pick(cat))
+                w.bind("<Enter>", lambda e, t=about: self.footer.config(text=t, fg=c["text"]))
+                w.bind("<Leave>", lambda e: self.footer.config(text=DEFAULT_HINT, fg=c["muted"]))
 
     def _section(self, cat: str, n: int) -> None:
         fg, soft = self.cat_colors(cat)
@@ -516,7 +519,8 @@ class App:
         f.pack(fill="x")
         tk.Frame(f, width=self.px(6), bg=fg).pack(side="left", fill="y")
         self._label(f, cat, 12, bold=True, fg=fg, bg=soft, pady=8, padx=12).pack(side="left")
-        self._label(f, f"{n}개", 10, fg=fg, bg=soft, padx=8).pack(side="right")
+        self._label(f, f"{n}개", 10, bold=True, fg=fg, bg=soft, padx=10).pack(side="right")
+        self._label(f, ABOUT[cat], 10, fg=self.c["text"], bg=soft).pack(side="left")  # what belongs here
 
     def _fit(self, text: str, room: int) -> str:
         """Shorten text with an ellipsis so it fits in `room` pixels at the row-name font (full name stays in the copy menu)."""
@@ -572,7 +576,7 @@ class App:
     def build_menu(self, s: dict) -> tk.Menu:
         c = self.c
         m = tk.Menu(self.root, tearoff=0, bg=c["surface"], fg=c["text"], activebackground=c["soft"],
-                    activeforeground=c["accent"], bd=0, font=self.f(11))
+                    activeforeground=c["accent"], disabledforeground=c["muted"], bd=0, font=self.f(11))
         m.add_command(label="이름 복사", command=lambda: self.copy(s["name"]))
         m.add_command(label="용도 설명 수정…", command=lambda: self.edit_note(s))
         m.add_command(label="SKILL.md 열어서 수정" if s["managed"] else "SKILL.md 열기 (보기)",
@@ -826,7 +830,7 @@ class AddDialog:
         btns.pack(side="bottom", fill="x", pady=(10, 0))
         self.install_btn = app._button(btns, "선택한 스킬 설치", self.do_install, primary=True)
         self.install_btn.pack(side="right")
-        self.install_btn.config(state="disabled")
+        self.app._enable(self.install_btn, False)
         app._button(btns, "닫기", self.close).pack(side="right", padx=8)
         app._label(p, "⚠ 스킬은 에이전트가 그대로 따르는 지시문이며 스크립트를 포함할 수 있습니다. "
                       "신뢰할 수 있는 출처만 설치하세요.", 10, fg=c["warn_fg"], bg=c["bg"], anchor="w", justify="left",
@@ -840,7 +844,7 @@ class AddDialog:
     def load_link(self) -> None:
         text = self.link.get()
         self.say("불러오는 중… (처음 받는 저장소는 몇 초 걸립니다)")
-        self.install_btn.config(state="disabled")
+        self.app._enable(self.install_btn, False)
 
         def work():
             _, root = mgr.fetch(text)
@@ -878,7 +882,7 @@ class AddDialog:
             app._check(row, d.name, var, bg=c["surface"]).pack(anchor="w")
             app._label(row, brief(d.name, info["desc"], notes), 10, fg=c["muted"], anchor="w", justify="left",
                        wraplength=app.px(self.W - 100)).pack(fill="x", padx=(26, 0))
-        self.install_btn.config(state="normal")
+        self.app._enable(self.install_btn, True)
 
     def do_install(self) -> None:
         picks = [d for d, v in self.picks.items() if v.get()]
@@ -888,13 +892,13 @@ class AddDialog:
             return
         replace = self.replace.get()
         self.say("설치 중…")
-        self.install_btn.config(state="disabled")
+        self.app._enable(self.install_btn, False)
         self.app.bg(lambda: mgr.install(picks, agents, replace), self._installed)
 
     def _installed(self, res) -> None:
         if not self.win.winfo_exists():
             return
-        self.install_btn.config(state="normal")
+        self.app._enable(self.install_btn, True)
         if isinstance(res, Exception):
             self.say(f"설치 실패: {res}", warn=True)
             return
