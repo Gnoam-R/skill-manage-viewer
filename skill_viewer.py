@@ -268,6 +268,7 @@ class App:
         self.visible = True
         self.cat: str | None = None  # category picked in the rail; None = all
         self.shown: list[dict] = []
+        self.sections: dict[str, tk.Frame] = {}  # built category groups of the list; see render()
         self.updatable: set[Path] = set()
         self.data: dict[str, list[dict]] = {}
         self.agent = tk.StringVar(value=AGENTS[0])
@@ -478,8 +479,10 @@ class App:
     # ---- list -------------------------------------------------------------------------------
     def load(self) -> None:
         mgr.version.cache_clear()
-        self.data = {a: collect(a) for a in AGENTS}
-        self.render()
+        data = {a: collect(a) for a in AGENTS}
+        if data != self.data:  # rescanning is cheap; redrawing is not, and would also reset what the user is reading
+            self.data = data
+            self.render()
 
     def set_agent(self, name: str) -> None:
         self.agent.set(name)
@@ -488,9 +491,10 @@ class App:
 
     def pick(self, cat: str | None) -> None:
         self.cat = cat
-        self.render(top=True)
+        self.render(top=True, rebuild=False)
 
-    def render(self, top: bool = False) -> None:
+    def render(self, top: bool = False, rebuild: bool = True) -> None:
+        """rebuild=False (a category click) keeps the groups already built and only shows the picked ones."""
         c, agent = self.c, self.agent.get()
         q = self.query.get().strip().lower()
         everything = self.data.get(agent, [])
@@ -503,13 +507,20 @@ class App:
         self.subtitle.config(text=f"{agent}에서 사용할 수 있는 스킬")
         self._draw_rail(counts, len(found))
         self.count.config(text=f"{len(self.shown)}개 스킬" + (f" · '{q}' 검색 결과" if q else ""))
-        self.list.clear()
-        for cat in [n for n, _ in CATEGORIES] + [OTHER]:
-            items = [s for s in self.shown if s["cat"] == cat]
-            if items:
-                self._section(cat, len(items))
-                for s in items:
-                    self._row(s)
+        if rebuild or not self.shown:  # data, agent, search or theme changed (or only the empty note is up): groups are stale
+            self.list.clear()
+            self.sections = {}
+        groups = [(cat, [s for s in self.shown if s["cat"] == cat]) for cat in [n for n, _ in CATEGORIES] + [OTHER]]
+        wanted = [self._group(cat, items) for cat, items in groups if items]
+        for w in self.body.winfo_children():
+            if w not in wanted:
+                w.pack_forget()
+        packed = [g for g in wanted if g.winfo_manager()]  # groups already on screen stay put: laying the list out again is the slow part
+        prev = None
+        for g in wanted:
+            if not g.winfo_manager():
+                g.pack(fill="x", **({"after": prev} if prev else {"before": packed[0]} if packed else {}))
+            prev = g
         if not self.shown:
             msg = ("일치하는 스킬이 없습니다" if everything else
                    f"{agent}에 설치된 스킬이 없습니다.\n\n{mgr.AGENT_DIRS[agent]}\n\n위의 ＋ 추가에서 설치할 수 있습니다.")
@@ -539,9 +550,18 @@ class App:
                 w.bind("<Enter>", lambda e, t=about: self.footer.config(text=t, fg=c["text"]))
                 w.bind("<Leave>", lambda e: self.footer.config(text=DEFAULT_HINT, fg=c["muted"]))
 
-    def _section(self, cat: str, n: int) -> None:
+    def _group(self, cat: str, items: list[dict]) -> tk.Frame:
+        """One category's header and rows: built the first time it is shown, afterwards only packed or hidden."""
+        if cat not in self.sections:
+            g = self.sections[cat] = tk.Frame(self.body, bg=self.c["surface"])
+            self._section(g, cat, len(items))
+            for s in items:
+                self._row(g, s)
+        return self.sections[cat]
+
+    def _section(self, parent, cat: str, n: int) -> None:
         fg, soft = self.cat_colors(cat)
-        f = tk.Frame(self.body, bg=soft)
+        f = tk.Frame(parent, bg=soft)
         f.pack(fill="x")
         tk.Frame(f, width=self.px(6), bg=fg).pack(side="left", fill="y")
         self._label(f, cat, 12, bold=True, fg=fg, bg=soft, pady=8, padx=12).pack(side="left")
@@ -554,10 +574,10 @@ class App:
             text = text.rstrip("…")[:-1] + "…"
         return text
 
-    def _row(self, s: dict) -> None:
+    def _row(self, parent, s: dict) -> None:
         c = self.c
         fg, _ = self.cat_colors(s["cat"])
-        wrap = tk.Frame(self.body, bg=c["surface"], cursor="hand2")
+        wrap = tk.Frame(parent, bg=c["surface"], cursor="hand2")
         wrap.pack(fill="x")
         tk.Frame(wrap, width=self.px(6), bg=fg).pack(side="left", fill="y")
         f = tk.Frame(wrap, bg=c["surface"], cursor="hand2")
@@ -580,7 +600,7 @@ class App:
             self._label(top, "업데이트 있음", 9, bold=True, fg=c["on_accent"], bg=c["accent"], padx=6).pack(side="left", padx=2)
         note = self._label(f, s["note"], 10, fg=c["muted"], anchor="w", justify="left", wraplength=inner - self.px(28))
         note.pack(fill="x", padx=(14, 12), pady=(2, 9))
-        tk.Frame(self.body, height=1, bg=c["line"]).pack(fill="x")
+        tk.Frame(parent, height=1, bg=c["line"]).pack(fill="x")
         parts = (wrap, f, top, name, tag, more, note)
 
         def tint(color):

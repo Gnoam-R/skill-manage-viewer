@@ -199,6 +199,39 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(app._fit(long, 10_000), long)
         self.assertTrue(app._fit("x" * 500, 1))  # never loops forever or returns nothing
 
+    def test_03c_category_click_reuses_built_rows(self):
+        app = self.app
+        app.set_agent("Claude Code")
+        app.pick(None)
+        cats = sorted({s["cat"] for s in app.shown})
+        self.assertGreater(len(cats), 1)
+        built = app.sections[cats[0]]
+        app.pick(cats[1])
+        self.assertEqual(built.winfo_manager(), "")  # hidden, not destroyed
+        app.pick(cats[0])
+        self.assertIs(app.sections[cats[0]], built)  # same widgets as before, nothing rebuilt
+        self.assertEqual(built.winfo_manager(), "pack")
+        self.assertTrue(all(s["cat"] == cats[0] for s in app.shown))
+        app.pick(None)  # everything shown again: the hidden groups come back in category order
+        order = [c for c in [n for n, _ in v.CATEGORIES] + [v.OTHER] if c in app.sections]
+        self.assertEqual(app.body.pack_slaves(), [app.sections[c] for c in order])
+        app.pick(cats[0])
+        app.query.set("zzzz-no-match")  # a search changes the rows, so the groups must be rebuilt
+        self.assertIsNot(app.sections.get(cats[0]), built)
+        self.assertFalse(built.winfo_exists())
+        app.query.set("")
+        app.pick(None)
+
+    def test_03d_load_redraws_only_when_something_changed(self):
+        app = self.app
+        with mock.patch.object(app, "render") as render:
+            app.load()
+            render.assert_not_called()  # same skills as on screen: leave the list alone
+            app.data["Codex"] = [{"name": "stale"}]
+            app.load()
+            render.assert_called_once()
+        app.render()
+
     def test_04_menu_entries(self):
         app = self.app
         menu = app.build_menu(find(app, "Codex", "legacy"))
