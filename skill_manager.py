@@ -21,9 +21,12 @@ from urllib.parse import urlparse
 
 HOME = Path.home()
 STORE = HOME / ".skill-manager"
+# Where each agent keeps its config; Claude Code and Codex honour these env vars, so follow them on other people's PCs.
+CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME / ".claude")
+CODEX_HOME = Path(os.environ.get("CODEX_HOME") or HOME / ".codex")
 AGENT_DIRS = {
-    "Claude Code": HOME / ".claude/skills",
-    "Codex": HOME / ".codex/skills",
+    "Claude Code": CLAUDE_HOME / "skills",
+    "Codex": CODEX_HOME / "skills",
     "Antigravity": HOME / ".gemini/config/skills",
 }
 # The login-time updater written earlier for mattpocock/skills re-links every name in its `$names` list.
@@ -331,6 +334,18 @@ def set_note(name: str, text: str) -> None:
         notes.pop(name, None)  # empty = back to the built-in / generated description
     STORE.mkdir(parents=True, exist_ok=True)
     (STORE / "notes.json").write_text(json.dumps(notes, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def load_settings() -> dict:
+    try:
+        return json.loads((STORE / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_setting(key: str, value: str) -> None:
+    STORE.mkdir(parents=True, exist_ok=True)
+    (STORE / "settings.json").write_text(json.dumps({**load_settings(), key: value}, indent=1), encoding="utf-8")
 
 
 def open_in_editor(path: Path) -> None:
