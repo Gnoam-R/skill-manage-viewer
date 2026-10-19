@@ -57,6 +57,14 @@ def open_path(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
+def open_folder(path: Path) -> None:
+    """Show a folder in Explorer / Finder."""
+    if WIN:
+        os.startfile(path)  # type: ignore[attr-defined]
+    else:
+        subprocess.Popen(["open" if MAC else "xdg-open", str(path)])
+
+
 # ---- screen --------------------------------------------------------------------------------------
 def dpi_aware() -> None:
     if WIN:

@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from collections import Counter
 from pathlib import Path
@@ -57,9 +58,11 @@ CAT_COLORS = {
 }
 
 LIGHT = dict(bg="#F4F6F9", surface="#FFFFFF", rail="#EBEFF5", line="#CBD3DE", text="#0F172A", muted="#475569",
-             accent="#1D5FD0", on_accent="#FFFFFF", soft="#E3ECFC", warn_bg="#FFF1D6", warn_fg="#7A4A00")
+             accent="#1D5FD0", on_accent="#FFFFFF", soft="#E3ECFC", warn_bg="#FFF1D6", warn_fg="#7A4A00",
+             danger="#B42318", danger_bg="#FEECEB")
 DARK = dict(bg="#161B22", surface="#1F2630", rail="#1A2029", line="#3A4452", text="#F3F6FA", muted="#C2CBD6",
-            accent="#7DB0FF", on_accent="#0B1220", soft="#2A3B55", warn_bg="#4A3A14", warn_fg="#FFD98A")
+            accent="#7DB0FF", on_accent="#0B1220", soft="#2A3B55", warn_bg="#4A3A14", warn_fg="#FFD98A",
+            danger="#FF8A80", danger_bg="#4A2220")
 FONT, FALLBACK_FONT = "Pretendard", plat.FALLBACK_FONT
 TRAY_COMMANDS = {"toggle", "add_dialog", "check_updates", "move", "load", "quit"}  # what the tray may ask the app to do
 TRAY_NAME = "메뉴 막대" if plat.MAC else "트레이"
@@ -67,6 +70,12 @@ DEFAULT_HINT = f"클릭: 이름 복사 · ⋯ 또는 우클릭: 수정·삭제 �
 
 
 # ---- data -------------------------------------------------------------------------------------
+def tilde(p: Path) -> str:
+    """A path under the home folder as ~/...: shorter, and screenshots don't show the account name."""
+    text, home = str(p), str(HOME)
+    return "~" + text[len(home):] if text.lower().startswith(home.lower()) else text
+
+
 def categorize(name: str, desc: str) -> str:
     if cat := CATEGORY_OF.get(name) or CATEGORY_OF.get(name.split(":")[-1]):
         return cat
@@ -226,6 +235,11 @@ def make_icns(path: Path) -> None:
     icon_image(1024).save(path, format="ICNS")
 
 
+def rounded_rect(canvas, x1, y1, x2, y2, r, **kw):
+    pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+    return canvas.create_polygon(pts, smooth=True, **kw)
+
+
 class Scroll:
     """A vertically scrollable frame: pack content into .body, place .wrap."""
 
@@ -276,6 +290,9 @@ class App:
         self.tray = None
         self.tray_proc: subprocess.Popen | None = None
         self.dialog: AddDialog | None = None
+        self.detail_win: DetailDialog | None = None
+        self.popup: Popup | None = None
+        self._last_toggle = 0.0
         self._say_job = None
         self._build()
         self.query.trace_add("write", lambda *_: self.render(top=True))
@@ -291,7 +308,7 @@ class App:
         root.after(60_000, self._tick)
 
     # ---- widgets ----------------------------------------------------------------------------
-    def px(self, n: int) -> int:
+    def px(self, n: float) -> int:
         return int(n * self.scale)
 
     def f(self, size: int = 11, bold: bool = False) -> tuple:
@@ -317,19 +334,19 @@ class App:
                                      self.footer.config(text=DEFAULT_HINT, fg=self.c["muted"])))
         return b
 
-    def _button(self, parent, text, command, primary=False):
+    def _button(self, parent, text, command, primary=False, danger=False):
         """A Label dressed as a button: Tk on macOS draws native buttons and ignores their colors."""
         c = self.c
         base = c["accent"] if primary else c["surface"]
-        b = tk.Label(parent, text=text, font=self.f(11, primary), padx=16, pady=7, cursor="hand2", bg=base,
-                     fg=c["on_accent"] if primary else c["text"], disabledforeground=c["muted"],
-                     highlightthickness=0 if primary else 1, highlightbackground=c["line"])
+        fg = c["on_accent"] if primary else c["danger"] if danger else c["text"]
+        b = tk.Label(parent, text=text, font=self.f(11, primary), padx=16, pady=7, cursor="hand2", bg=base, fg=fg,
+                     disabledforeground=c["muted"], highlightthickness=0 if primary else 1, highlightbackground=c["line"])
 
         def on() -> bool:
             return str(b.cget("state")) != "disabled"
         b.bind("<Button-1>", lambda e: command() if on() else None)
         if not primary:
-            b.bind("<Enter>", lambda e: b.config(bg=c["soft"]) if on() else None)
+            b.bind("<Enter>", lambda e: b.config(bg=c["danger_bg"] if danger else c["soft"]) if on() else None)
             b.bind("<Leave>", lambda e: b.config(bg=base))
         return b
 
@@ -339,12 +356,43 @@ class App:
         button.config(state="normal" if on else "disabled", bg=c["accent"] if on else c["line"],
                       cursor="hand2" if on else "arrow")
 
-    def _check(self, parent, text, var, bg=None, **kw):
+    def _check(self, parent, text, var, bg=None):
+        """A checkbox drawn in the app's colors (the system one ignores them). Click or Space toggles `var`."""
         c = self.c
         bg = bg or c["bg"]
-        return tk.Checkbutton(parent, text=text, variable=var, font=self.f(11), fg=c["text"], bg=bg,
-                              activebackground=bg, activeforeground=c["text"], selectcolor=c["surface"],
-                              anchor="w", bd=0, highlightthickness=0, cursor="hand2", **kw)
+        f = tk.Frame(parent, bg=bg, cursor="hand2", takefocus=1, highlightthickness=1, highlightbackground=bg,
+                     highlightcolor=c["accent"])
+        size = self.px(18)
+        box = tk.Canvas(f, width=size, height=size, bg=bg, highlightthickness=0, cursor="hand2")
+        box.pack(side="left", padx=(2, self.px(8)), pady=2)
+        lab = self._label(f, text, 11, bg=bg, cursor="hand2")
+        lab.pack(side="left", padx=(0, 2))
+        hover = [False]
+
+        def draw(*_):
+            on, s = var.get(), size - 2
+            box.delete("all")
+            # unchecked border uses `muted`, not `line`: a control's outline needs 3:1 against its background
+            rounded_rect(box, 1, 1, s, s, self.px(5), fill=c["accent"] if on else c["surface"],
+                         outline=c["accent"] if on or hover[0] else c["muted"], width=max(1, self.px(1.5)))
+            if on:
+                tick = [round(size * k) for k in (0.27, 0.52, 0.43, 0.68, 0.74, 0.33)]
+                box.create_line(*tick, fill=c["on_accent"], width=max(2, self.px(2)), capstyle=tk.ROUND, joinstyle=tk.ROUND)
+
+        def set_hover(v):
+            hover[0] = v
+            draw()
+        for w in (f, box, lab):
+            w.bind("<Button-1>", lambda e: (var.set(not var.get()), f.focus_set()))
+            w.bind("<Enter>", lambda e: set_hover(True))
+            w.bind("<Leave>", lambda e: set_hover(False))
+        f.bind("<space>", lambda e: var.set(not var.get()))
+        trace = var.trace_add("write", draw)
+        # the variable outlives this widget (tabs rebuild it), so stop redrawing a destroyed canvas
+        f.bind("<Destroy>", lambda e: var.trace_remove("write", trace) if e.widget is f else None)
+        draw()
+        f.box = box  # type: ignore[attr-defined]  # for tests
+        return f
 
     def _entry(self, parent, var):
         c = self.c
@@ -590,6 +638,7 @@ class App:
             w.bind("<Enter>", lambda e: tint(c["soft"]))
             w.bind("<Leave>", lambda e: tint(c["surface"]))
             w.bind("<Button-1>", lambda e, n=s["name"]: self.copy(n))
+            w.bind("<Double-Button-1>", lambda e, s=s: self.detail(s))
             for seq in plat.RIGHT_CLICK:
                 w.bind(seq, lambda e, s=s: self.row_menu(s, e.x_root, e.y_root))
         more.bind("<Button-1>", lambda e, s=s: self.row_menu(s, e.x_root, e.y_root))
@@ -600,29 +649,51 @@ class App:
         self.say(f"복사됨: {name}", ms=2000)
 
     # ---- row actions ------------------------------------------------------------------------
-    def build_menu(self, s: dict) -> tk.Menu:
-        c = self.c
-        m = tk.Menu(self.root, tearoff=0, bg=c["surface"], fg=c["text"], activebackground=c["soft"],
-                    activeforeground=c["accent"], disabledforeground=c["muted"], bd=0, font=self.f(11))
-        m.add_command(label="이름 복사", command=lambda: self.copy(s["name"]))
-        m.add_command(label="용도 설명 수정…", command=lambda: self.edit_note(s))
-        m.add_command(label="SKILL.md 열어서 수정" if s["managed"] else "SKILL.md 열기 (보기)",
-                      command=lambda: self.edit_file(s))
-        m.add_separator()
+    def menu_items(self, s: dict) -> list[tuple[str, object, str]]:
+        """(label, action, kind) for a skill's ⋯ menu. kind: '' | 'danger' | 'note' (no action) | '-' (separator)."""
+        items: list[tuple[str, object, str]] = [
+            ("상세 보기", lambda: self.detail(s), ""),
+            ("이름 복사", lambda: self.copy(s["name"]), ""),
+            ("용도 설명 수정…", lambda: self.edit_note(s), ""),
+            ("SKILL.md 열어서 수정" if s["managed"] else "SKILL.md 열기 (보기)", lambda: self.edit_file(s), ""),
+            ("", None, "-"),
+        ]
         if s["managed"]:
             if s["repo"]:
-                m.add_command(label="이 스킬의 저장소 업데이트 확인", command=lambda: self.check_updates([s["repo"]]))
-            m.add_command(label="삭제…", command=lambda: self.delete(s))
+                items.append(("이 스킬의 저장소 업데이트 확인", lambda: self.check_updates([s["repo"]]), ""))
+            items.append(("삭제…", lambda: self.delete(s), "danger"))
         else:
-            m.add_command(label=f"{s['origin']} 제공 스킬이라 여기서 삭제할 수 없습니다", state="disabled")
-        return m
+            items.append((f"{s['origin']} 제공 스킬이라 여기서 삭제할 수 없습니다", None, "note"))
+        return items
 
     def row_menu(self, s: dict, x: int, y: int) -> None:
-        m = self.build_menu(s)
-        try:
-            m.tk_popup(x, y)
-        finally:
-            m.grab_release()
+        self.close_popup()
+        self.popup = Popup(self, self.menu_items(s), x, y)
+
+    def close_popup(self) -> None:
+        if self.popup:
+            self.popup.close()
+            self.popup = None
+
+    def detail(self, s: dict) -> None:
+        self.close_popup()
+        if self.detail_win and self.detail_win.win.winfo_exists():
+            self.detail_win.close()
+        self.detail_win = DetailDialog(self, s)
+
+    def _side_window(self, title: str, width: int, height: int) -> tk.Toplevel:
+        """A themed window beside the panel (not over it), for dialogs."""
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.configure(bg=self.c["bg"])
+        win.transient(self.root)
+        win.attributes("-topmost", True)
+        w, h = self.px(width), min(self.px(height), win.winfo_screenheight() - 80)
+        rx, ry = self.root.winfo_x(), self.root.winfo_y()
+        x = rx - w - 12 if rx > w + 24 else rx + self.root.winfo_width() + 12
+        win.geometry(f"{w}x{h}+{max(x, 0)}+{ry}")
+        self._dark_titlebar(win)
+        return win
 
     def edit_note(self, s: dict) -> None:
         cur = brief(s["name"], s["desc"], mgr.load_notes())
@@ -737,6 +808,7 @@ class App:
         self.root.deiconify()
         self.root.lift()
         self.root.attributes("-topmost", True)
+        self.root.focus_force()
         self.visible = True
         self.load()
 
@@ -751,7 +823,13 @@ class App:
             self.root.after(150, lambda: self.hide() if self.root.state() == "iconic" else None)
 
     def toggle(self) -> None:
+        # a double-click on the tray icon arrives as two clicks: acting on both showed the window and hid it again
+        # The clock starts when the first click has been handled: showing reloads the list, which can take longer than
+        # the gap between the two clicks.
+        if time.monotonic() - self._last_toggle < 0.6:
+            return
         self.hide() if self.visible else self.show()
+        self._last_toggle = time.monotonic()
 
     def quit(self) -> None:
         if self.tray:
@@ -805,16 +883,7 @@ class AddDialog:
 
     def __init__(self, app: App):
         self.app, c = app, app.c
-        self.win = win = tk.Toplevel(app.root)
-        win.title("스킬 추가")
-        win.configure(bg=c["bg"])
-        win.transient(app.root)
-        win.attributes("-topmost", True)
-        w, h = app.px(self.W), min(app.px(self.H), win.winfo_screenheight() - 80)
-        rx, ry = app.root.winfo_x(), app.root.winfo_y()
-        x = rx - w - 12 if rx > w + 24 else rx + app.root.winfo_width() + 12  # beside the panel, not over it
-        win.geometry(f"{w}x{h}+{max(x, 0)}+{ry}")
-        app._dark_titlebar(win)
+        self.win = win = app._side_window("스킬 추가", self.W, self.H)
         self.mode = "link"
         self.picks: dict[Path, tk.BooleanVar] = {}
         self.agents = {a: tk.BooleanVar(value=True) for a in AGENTS}
@@ -983,6 +1052,153 @@ class AddDialog:
         self.say(f"만들었습니다: {d}\n편집기에서 SKILL.md 본문을 채워 주세요.")
         self.app.load()
         mgr.open_in_editor(d / "SKILL.md")
+
+
+class Popup:
+    """The ⋯ menu, drawn in the app's colors (the system menu can't be themed). Closes on pick, Esc or click-away."""
+
+    def __init__(self, app: App, items: list[tuple[str, object, str]], x: int, y: int):
+        c = app.c
+        self.app = app
+        self.win = win = tk.Toplevel(app.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=c["line"])
+        box = tk.Frame(win, bg=c["surface"])
+        box.pack(padx=1, pady=1)  # the 1px gap shows the line color as a border
+        tk.Frame(box, height=app.px(4), bg=c["surface"]).pack(fill="x")
+        self.rows: list[tk.Label] = []
+        for label, action, kind in items:
+            if kind == "-":
+                tk.Frame(box, height=1, bg=c["line"]).pack(fill="x", padx=10, pady=4)
+                continue
+            fg = c["danger"] if kind == "danger" else c["muted"] if kind == "note" else c["text"]
+            row = app._label(box, label, 11, fg=fg, anchor="w", padx=16, pady=7, cursor="hand2" if action else "arrow")
+            row.pack(fill="x")
+            self.rows.append(row)
+            if callable(action):
+                hover_bg, hover_fg = (c["danger_bg"], fg) if kind == "danger" else (c["soft"], c["accent"])
+                row.bind("<Enter>", lambda e, r=row, b=hover_bg, h=hover_fg: r.config(bg=b, fg=h))
+                row.bind("<Leave>", lambda e, r=row, f=fg: r.config(bg=c["surface"], fg=f))
+                row.bind("<Button-1>", lambda e, a=action: self.pick(a))
+        tk.Frame(box, height=app.px(4), bg=c["surface"]).pack(fill="x")
+        win.update_idletasks()
+        left, top, right, bottom = plat.work_area(app.root)
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        x = max(left, min(x, right - w - 4))
+        y = y if y + h < bottom else max(top, y - h)  # open upward near the bottom of the screen
+        win.geometry(f"+{x}+{y}")
+        win.bind("<Escape>", lambda e: self.close())
+        win.bind("<FocusOut>", lambda e: self.close())
+        win.focus_force()
+
+    def pick(self, action) -> None:
+        self.close()
+        action()
+
+    def close(self) -> None:
+        if self.win.winfo_exists():
+            self.win.destroy()
+
+
+class DetailDialog:
+    """Everything about one skill: purpose, category, origin and version, where it lives, which agents have it,
+    its files and its SKILL.md, with the actions that apply to it."""
+
+    W, H = 600, 760
+
+    def __init__(self, app: App, s: dict):
+        self.app, self.s, c = app, s, app.c
+        self.win = win = app._side_window(f"{s['name']} 상세", self.W, self.H)
+        win.protocol("WM_DELETE_WINDOW", self.close)
+        fg, soft = app.cat_colors(s["cat"])
+
+        head = tk.Frame(win, bg=c["surface"])
+        head.pack(fill="x")
+        tk.Frame(head, height=app.px(4), bg=fg).pack(fill="x")
+        app._label(head, s["name"], 16, bold=True, anchor="w", justify="left", wraplength=app.px(self.W - 40),
+                   padx=20, pady=(12)).pack(fill="x")
+        chips = tk.Frame(head, bg=c["surface"])
+        chips.pack(fill="x", padx=20, pady=(0, 12))
+        app._label(chips, s["cat"], 10, bold=True, fg=fg, bg=soft, padx=8, pady=2).pack(side="left")
+        app._label(chips, s["origin"], 10, fg=c["muted"], bg=c["rail"], padx=8, pady=2).pack(side="left", padx=6)
+        if s["manual"]:
+            app._label(chips, "수동", 10, fg=c["warn_fg"], bg=c["warn_bg"], padx=8, pady=2).pack(side="left")
+        if s["repo"] in app.updatable:
+            app._label(chips, "업데이트 있음", 10, bold=True, fg=c["on_accent"], bg=c["accent"], padx=8, pady=2).pack(side="left", padx=6)
+        tk.Frame(win, height=1, bg=c["line"]).pack(fill="x")
+
+        # actions at the bottom first, so the SKILL.md view can take whatever height is left. Two rows: six buttons
+        # don't fit one line of this window.
+        bottom = tk.Frame(win, bg=c["bg"])
+        bottom.pack(side="bottom", fill="x", padx=16, pady=(8, 12))
+        tools = tk.Frame(bottom, bg=c["bg"])
+        tools.pack(fill="x")
+        app._button(tools, "SKILL.md 수정" if s["managed"] else "SKILL.md 열기", lambda: app.edit_file(s)).pack(side="left")
+        app._button(tools, "폴더 열기", lambda: plat.open_folder(s["path"])).pack(side="left", padx=(8, 0))
+        app._button(tools, "이름 복사", lambda: app.copy(s["name"])).pack(side="left", padx=(8, 0))
+        if s["repo"]:
+            app._button(tools, "업데이트 확인", lambda: app.check_updates([s["repo"]])).pack(side="left", padx=(8, 0))
+        ends = tk.Frame(bottom, bg=c["bg"])
+        ends.pack(fill="x", pady=(8, 0))
+        if s["managed"]:
+            app._button(ends, "삭제…", self.delete, danger=True).pack(side="left")
+        app._button(ends, "닫기", self.close).pack(side="right")
+        tk.Frame(win, height=1, bg=c["line"]).pack(side="bottom", fill="x")
+
+        body = tk.Frame(win, bg=c["bg"])
+        body.pack(fill="both", expand=True, padx=20, pady=(14, 0))
+        app._label(body, s["note"], 12, bold=True, bg=c["bg"], anchor="w", justify="left",
+                   wraplength=app.px(self.W - 40)).pack(fill="x")
+        if s["desc"] and s["desc"] != s["note"]:
+            app._label(body, s["desc"], 10, fg=c["muted"], bg=c["bg"], anchor="w", justify="left",
+                       wraplength=app.px(self.W - 40)).pack(fill="x", pady=(4, 0))
+        grid = tk.Frame(body, bg=c["bg"])
+        grid.pack(fill="x", pady=(14, 10))
+        for i, (key, value) in enumerate(self.facts()):
+            app._label(grid, key, 10, fg=c["muted"], bg=c["bg"], anchor="nw").grid(row=i, column=0, sticky="nw", pady=3)
+            app._label(grid, value, 10, bg=c["bg"], anchor="w", justify="left",
+                       wraplength=app.px(self.W - 160)).grid(row=i, column=1, sticky="w", padx=(14, 0), pady=3)
+        app._label(body, "SKILL.md", 10, bold=True, fg=c["muted"], bg=c["bg"], anchor="w").pack(fill="x")
+        frame = tk.Frame(body, bg=c["surface"], highlightthickness=1, highlightbackground=c["line"])
+        frame.pack(fill="both", expand=True, pady=(4, 0))
+        self.text = tk.Text(frame, wrap="word", relief="flat", bd=0, padx=12, pady=10, font=app.f(10),
+                            bg=c["surface"], fg=c["text"], insertbackground=c["text"], height=8)
+        self.text.pack(fill="both", expand=True)  # scrolls with the wheel; the system scrollbar wouldn't match the theme
+        try:
+            content = (s["path"] / "SKILL.md").read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            content = f"읽지 못했습니다: {e}"
+        self.text.insert("1.0", content)
+        self.text.configure(state="disabled")  # a viewer; editing goes through the editor button
+
+    def facts(self) -> list[tuple[str, str]]:
+        app, s = self.app, self.s
+        p = s["path"]
+        where = tilde(p) + (f"\n→ {tilde(mgr.target_of(p))}" if mgr.is_link(p) else "")
+        agents = [a for a in AGENTS if any(x["name"] == s["name"] for x in app.data.get(a, []))]
+        files = sorted(str(f.relative_to(p)) for f in p.rglob("*") if f.is_file() and ".git" not in f.parts)
+        shown = ", ".join(files[:8]) + (f" 외 {len(files) - 8}개" if len(files) > 8 else "")
+        facts = [("카테고리", f"{s['cat']} — {ABOUT.get(s['cat'], '')}"), ("출처", s["origin"])]
+        if s["repo"]:
+            facts += [("저장소", mgr.repo_name(s["repo"])), ("버전", mgr.version(s["repo"]))]
+        facts += [
+            ("호출", "사용자가 /이름으로 직접 불러야 함 (수동)" if s["manual"] else "에이전트가 상황에 맞으면 스스로 사용"),
+            ("설치된 에이전트", ", ".join(agents) or "-"),
+            ("위치", where),
+            (f"파일 {len(files)}개", shown or "-"),
+        ]
+        return facts
+
+    def delete(self) -> None:
+        before = self.app.data
+        self.app.delete(self.s)
+        if self.app.data is not before:  # the list was reloaded, so the skill is gone
+            self.close()
+
+    def close(self) -> None:
+        if self.win.winfo_exists():
+            self.win.destroy()
 
 
 if __name__ == "__main__":
