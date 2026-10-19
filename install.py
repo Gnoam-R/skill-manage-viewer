@@ -10,6 +10,7 @@ Search for "스킬 카탈로그" or "Skill Catalog". Nothing is copied: the entr
 
 import argparse
 import base64
+import contextlib
 import os
 import plistlib
 import shutil
@@ -132,6 +133,9 @@ def targets(dest: Path | None) -> list[Path]:
 
 
 def main(argv: list[str]) -> int:
+    # an English Windows console (cp1252) can't print Korean; show '?' instead of crashing after the work is done
+    with contextlib.suppress(AttributeError):
+        sys.stdout.reconfigure(errors="replace")  # type: ignore[union-attr]
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--startup", action="store_true")
     ap.add_argument("--uninstall", action="store_true")
