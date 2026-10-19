@@ -4,12 +4,16 @@ Drives the panel in-process (no synthetic mouse/keyboard input) against temp age
 ~/.claude, ~/.codex and ~/.gemini are only read for plugin/built-in skills and never written.
 """
 
+import ctypes
+import json
 import os
 import subprocess
 import tempfile
 import time
+import tkinter as tk
 import unittest
 from pathlib import Path
+from tkinter import font as tkfont
 from unittest import mock
 
 from PIL import ImageGrab
@@ -23,6 +27,16 @@ SHOTS = Path(tempfile.gettempdir())
 def write_skill(d: Path, desc: str = "does a thing") -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / "SKILL.md").write_text(f"---\nname: {d.name}\ndescription: {desc}\n---\nbody\n", encoding="utf-8")
+
+
+def walk(w):
+    yield w
+    for c in w.winfo_children():
+        yield from walk(c)
+
+
+def texts(w):
+    return [x.cget("text") for x in walk(w) if isinstance(x, tk.Label)]
 
 
 def find(app: v.App, agent: str, name: str) -> dict | None:
@@ -83,7 +97,7 @@ class PanelTest(unittest.TestCase):
         return box
 
     def rows(self):
-        return sum(1 for w in self.app.body.winfo_children() if w.cget("cursor") == "hand2")
+        return len(self.app.shown)
 
     # ---- window, tray, list ---------------------------------------------------------------
     def test_01_tray_corner_and_toggle(self):
@@ -103,34 +117,74 @@ class PanelTest(unittest.TestCase):
         app._pump()
         self.assertTrue(app.visible and app.root.state() == "normal")
 
+    def test_01b_window_has_minimize_and_close_but_no_toolwindow_style(self):
+        app = self.app
+        app.root.update()
+        hwnd = ctypes.windll.user32.GetParent(app.root.winfo_id())
+        style, ex = ctypes.windll.user32.GetWindowLongW(hwnd, -16), ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+        self.assertTrue(style & 0x20000, "WS_MINIMIZEBOX missing")  # the button the user asked for
+        self.assertFalse(ex & 0x80, "WS_EX_TOOLWINDOW would hide the minimize button")
+        app.root.iconify()  # minimizing sends the window to the tray instead of leaving it on the taskbar
+        self.settle(lambda: not app.visible)
+        self.assertEqual(app.root.state(), "withdrawn")
+        app.events.put("toggle")
+        app._pump()
+        self.assertTrue(app.visible and app.root.state() == "normal")
+
     def test_02_origin_labels(self):
         legacy = find(self.app, "Codex", "legacy")
         self.assertEqual((legacy["origin"], legacy["managed"], legacy["repo"]), ("로컬", True, None))
         g = find(self.app, "Claude Code", "gitskill")
         self.assertTrue(g["origin"].startswith("git · ") and g["repo"] == self.repo.resolve() and g["managed"])
 
-    def test_03_tabs_search_fold(self):
+    def test_03_tabs_search_rail(self):
         app = self.app
         app.set_agent("Claude Code")
         app.query.set("gitskill")
         app.root.update()
-        self.assertEqual(self.rows(), 2)  # one category header + one row
+        self.assertEqual(self.rows(), 1)
         app.query.set("zzzz-no-match")
         app.root.update()
         self.assertEqual(self.rows(), 0)
-        app.query.set("로컬")
+        app.query.set("git ·")
         app.root.update()  # origin text is searchable too
+        self.assertIn("gitskill", [s["name"] for s in app.shown])
+        self.assertGreater(self.rows(), 0)
         app.query.set("")
-        before = self.rows()
-        app.toggle_all()
-        app.root.update()
-        self.assertLess(self.rows(), before)
-        app.toggle_all()
-        app.root.update()
-        self.assertEqual(self.rows(), before)
+        total = self.rows()
+        cats = sorted({s["cat"] for s in app.data["Claude Code"]})
+        self.assertGreater(len(cats), 1)
+        app.pick(cats[0])  # clicking a category in the rail lists only that category
+        self.assertTrue(all(s["cat"] == cats[0] for s in app.shown))
+        self.assertTrue(0 < self.rows() < total)
+        self.shot(app.root, "t3_category")
+        app.pick(None)
+        self.assertEqual(self.rows(), total)
+        app.pick(cats[0])
+        app.query.set("zzzz-no-match")  # the picked category has no match: fall back to all, not an empty rail
+        self.assertIsNone(app.cat)
+        app.query.set("")
         self.shot(app.root, "t3_list")
         app.copy("grilling")
         self.assertEqual(app.root.clipboard_get(), "grilling")
+
+    def test_03a_every_category_has_its_own_color(self):
+        app = self.app
+        for theme in ("light", "dark"):
+            app.theme = theme
+            colors = [app.cat_colors(c) for c in v.CAT_COLORS]
+            self.assertEqual(len(set(colors)), len(v.CAT_COLORS), theme)  # no two categories share a color pair
+            self.assertEqual(len({fg for fg, _ in colors}), len(v.CAT_COLORS), theme)
+        app.theme = "light"
+
+    def test_03b_long_names_are_shortened_not_wrapped(self):
+        app = self.app
+        self.assertEqual(app._fit("tdd", 200), "tdd")
+        long = "superpowers:finishing-a-development-branch"
+        out = app._fit(long, 150)
+        self.assertTrue(out.endswith("…") and out != long and app.name_font.measure(out) <= 150, out)
+        self.assertEqual(app._fit(long, 10_000), long)
+        self.assertTrue(app._fit("x" * 500, 1))  # never loops forever or returns nothing
 
     def test_04_menu_entries(self):
         app = self.app
@@ -235,14 +289,7 @@ class PanelTest(unittest.TestCase):
         upd.assert_not_called()
         app.set_agent("Claude Code")
         app.render()
-        labels = [
-            w.cget("text")
-            for f in app.body.winfo_children()
-            for t in f.winfo_children()
-            for w in t.winfo_children()
-            if isinstance(w, v.tk.Label)
-        ]
-        self.assertIn("업데이트 있음", labels)
+        self.assertIn("업데이트 있음", texts(app.body))
         self.shot(app.root, "t9_update_badge")
         app.updatable.clear()
 
@@ -260,6 +307,96 @@ class PanelTest(unittest.TestCase):
         trashed = [p.name.split("_", 2)[2] for p in (mgr.STORE / "trash").iterdir()]
         self.assertIn("legacy", trashed)  # the real folder was moved, not destroyed
         self.assertNotIn("gitskill", trashed)  # a link is only unlinked
+
+    # ---- theme, fonts, discovery ------------------------------------------------------------
+    def test_11_theme_toggle_is_saved_and_rebuilds(self):
+        app = self.app
+        self.assertEqual(app.theme, "light")  # bright by default
+        app.set_agent("Claude Code")
+        n = len(app.shown)
+        app.toggle_theme()
+        self.assertEqual((app.theme, mgr.load_settings()["theme"]), ("dark", "dark"))
+        self.assertEqual(len(app.shown), n)
+        self.shot(app.root, "t11_dark")
+        app.toggle_theme()
+        self.assertEqual((app.theme, mgr.load_settings()["theme"]), ("light", "light"))
+        self.shot(app.root, "t11_light")
+
+    def test_12_no_italic_anywhere(self):
+        app = self.app
+        app.add_dialog()
+        dlg = app.dialog
+        menu = app.build_menu(app.shown[0])
+        for page in ("링크로 설치", "새로 만들기"):
+            dlg.show(page)
+            for win in (app.root, dlg.win, menu):
+                for w in walk(win):
+                    try:
+                        spec = w.cget("font")
+                    except tk.TclError:
+                        continue  # frames etc. have no font option
+                    f = tkfont.Font(root=app.root, font=spec)
+                    self.assertEqual(f.actual("slant"), "roman", f"{w} {spec}")
+        self.assertEqual(app.f(11)[-1], "roman")
+        dlg.close()
+
+    def test_13_bundled_pretendard_is_used(self):
+        fonts = Path(v.__file__).parent / "fonts"
+        self.assertTrue((fonts / "Pretendard-Regular.otf").is_file() and (fonts / "Pretendard-Bold.otf").is_file())
+        self.assertTrue((fonts / "LICENSE.txt").is_file())  # OFL: the license travels with the font files
+        app = self.app
+        self.assertEqual(app.family, "Pretendard")
+        regular = tkfont.Font(root=app.root, family=app.family, size=10)
+        self.assertEqual((regular.actual("family"), regular.actual("weight")), ("Pretendard", "normal"))
+        self.assertEqual((app.name_font.actual("family"), app.name_font.actual("weight")), ("Pretendard", "bold"))
+
+
+class DiscoveryTest(unittest.TestCase):
+    """What happens on someone else's PC: other layouts, missing agents, broken files. No Tk needed."""
+
+    def test_odd_skill_files_do_not_break_the_list(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            (root / "plain").mkdir()
+            (root / "plain/SKILL.md").write_text("no front matter at all\n", encoding="utf-8")
+            (root / "binary").mkdir()
+            (root / "binary/SKILL.md").write_bytes(b"\xff\xfe\x00garbage")
+            (root / "multiline").mkdir()
+            (root / "multiline/SKILL.md").write_text("---\nname: ml\ndescription: >\n  first line\n  second line\n---\n", encoding="utf-8")
+            got = {s["name"]: s for s in v.scan(root)}
+            self.assertEqual(set(got), {"plain", "binary", "ml"})
+            self.assertEqual(got["ml"]["desc"], "first line second line")
+
+    def test_missing_agent_folders_are_just_empty(self):
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            dirs = {"Claude Code": t / "a", "Codex": t / "b", "Antigravity": t / "c"}
+            with mock.patch.object(mgr, "AGENT_DIRS", dirs), mock.patch.object(mgr, "CLAUDE_HOME", t / "home"):
+                for agent in dirs:
+                    # only a built-in skill folder (not under the user's control) can exist on such a PC
+                    self.assertTrue(all(s["origin"] == "내장" for s in v.collect(agent)))
+
+    def test_plugin_roots_tolerate_missing_or_odd_files(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(mgr, "CLAUDE_HOME", Path(t)):
+            home = Path(t)
+            self.assertEqual(v.claude_plugin_roots(), [])  # no plugins folder at all
+            (home / "plugins").mkdir()
+            (home / "plugins/installed_plugins.json").write_text("{not json", encoding="utf-8")
+            self.assertEqual(v.claude_plugin_roots(), [])
+            odd = {"plugins": {"a@m": [{}], "b@m": [], "c@m": [{"installPath": str(home / "c")}]}}
+            (home / "plugins/installed_plugins.json").write_text(json.dumps(odd), encoding="utf-8")
+            (home / "settings.json").write_text(json.dumps({"enabledPlugins": {"a@m": True, "b@m": True, "c@m": True}}), encoding="utf-8")
+            self.assertEqual(v.claude_plugin_roots(), [(home / "c" / "skills", "c:")])
+
+    def test_agent_homes_follow_env_vars(self):
+        out = subprocess.run(
+            ["python", "-c", "import skill_manager as m; print(m.AGENT_DIRS['Claude Code']); print(m.AGENT_DIRS['Codex'])"],
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent,
+            env={**os.environ, "CLAUDE_CONFIG_DIR": "D:/cc", "CODEX_HOME": "D:/cx"},
+        ).stdout.split()
+        self.assertEqual([Path(x) for x in out], [Path("D:/cc/skills"), Path("D:/cx/skills")])
 
 
 if __name__ == "__main__":

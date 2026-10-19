@@ -1,14 +1,16 @@
 """Skill catalog panel: lists the skills each agent (Claude Code / Codex / Antigravity) can use, grouped by
-category, and installs / updates / edits / deletes them. Lives in an always-on-top corner window that is
-opened and closed from a tray icon.
+category (category rail on the left, skills on the right), and installs / updates / edits / deletes them.
+Lives in an always-on-top corner window that is opened and closed from a tray icon.
 
-  pythonw skill_viewer.py            start (window visible; closing it hides it to the tray)
+  pythonw skill_viewer.py            start (window visible; minimize or close hides it to the tray)
   pythonw skill_viewer.py --hidden   start in the tray only
   python  skill_viewer.py --check    print counts per agent/category, no GUI
   python  skill_viewer.py --make-icon  rewrite skill_viewer.ico
 
 Needs: pip install pystray pillow     (the file operations themselves live in skill_manager.py)
+Font: Pretendard is loaded from ./fonts/*.otf when present (private to this process); otherwise Malgun Gothic.
 """
+
 import contextlib
 import ctypes
 import json
@@ -20,12 +22,14 @@ import threading
 import tkinter as tk
 from collections import Counter
 from pathlib import Path
+from tkinter import font as tkfont
 from tkinter import messagebox, simpledialog
 
 import skill_manager as mgr
 
+HERE = Path(__file__).parent
 HOME = Path.home()
-NOTES = json.loads(Path(__file__).with_name("skill_notes.json").read_text(encoding="utf-8"))
+NOTES = json.loads((HERE / "skill_notes.json").read_text(encoding="utf-8"))
 
 # First match wins; the skill name is tried against every rule before its description is. Edit freely.
 CATEGORIES = [
@@ -44,12 +48,27 @@ CATEGORIES = [
 OTHER = "기타"
 AGENTS = list(mgr.AGENT_DIRS)
 
-LIGHT = dict(bg="#F3F5F8", surface="#FFFFFF", line="#DFE3E8", text="#18212C", muted="#5E6A78",
-             accent="#1D5FD0", on_accent="#FFFFFF", soft="#EAF1FD", warn_bg="#FCF1DC", warn_fg="#8A5A00")
-DARK = dict(bg="#12171D", surface="#1A2129", line="#2B343E", text="#E6EAEE", muted="#93A0AE",
-            accent="#6FA3F5", on_accent="#0B1220", soft="#223247", warn_bg="#3A2D14", warn_fg="#F0C77A")
-FONT = "Malgun Gothic"
-DEFAULT_HINT = "클릭: 이름 복사 · ⋯: 수정·삭제 · 트레이 아이콘으로 열기/닫기"
+# Every category gets its own hue: (text on light, tint on light, text on dark, tint on dark).
+CAT_COLORS = {
+    "코드 리뷰·보안": ("#C0261D", "#FDE7E4", "#FF8A80", "#4A2220"),
+    "Git·사내 규칙": ("#C2410C", "#FFEBDD", "#FFA566", "#4A2D1A"),
+    "기획·검증": ("#A16207", "#FEF3C7", "#F5C451", "#463813"),
+    "설계·아키텍처": ("#15803D", "#DCF5E3", "#5FD38A", "#1B3D2A"),
+    "개발·테스트": ("#0F766E", "#D5F3EF", "#4FD1C5", "#173E3B"),
+    "UI·디자인": ("#1D4ED8", "#E0E9FF", "#7FA8FF", "#1F3158"),
+    "문서·파일": ("#4338CA", "#E5E4FF", "#A5A0FF", "#2B2A5C"),
+    "브라우저·자동화": ("#7E22CE", "#F1E3FD", "#C99BFF", "#3B2358"),
+    "스킬·설정 관리": ("#BE185D", "#FCE4EF", "#FF8FBF", "#4D1F37"),
+    "리서치": ("#475569", "#E8ECF1", "#B6C2D0", "#2C3541"),
+    OTHER: ("#52525B", "#ECECEF", "#C4C4CC", "#33333A"),
+}
+
+LIGHT = dict(bg="#F4F6F9", surface="#FFFFFF", rail="#EBEFF5", line="#CBD3DE", text="#0F172A", muted="#475569",
+             accent="#1D5FD0", on_accent="#FFFFFF", soft="#E3ECFC", warn_bg="#FFF1D6", warn_fg="#7A4A00")
+DARK = dict(bg="#161B22", surface="#1F2630", rail="#1A2029", line="#3A4452", text="#F3F6FA", muted="#C2CBD6",
+            accent="#7DB0FF", on_accent="#0B1220", soft="#2A3B55", warn_bg="#4A3A14", warn_fg="#FFD98A")
+FONT, FALLBACK_FONT = "Pretendard", "Malgun Gothic"
+DEFAULT_HINT = "클릭: 이름 복사 · ⋯ 또는 우클릭: 수정·삭제 · 트레이 아이콘으로 열기/닫기"
 
 
 # ---- data -------------------------------------------------------------------------------------
@@ -63,7 +82,7 @@ def categorize(name: str, desc: str) -> str:
 
 def brief(name: str, desc: str, user_notes: dict[str, str] | None = None) -> str:
     """Korean one-liner of what a skill is for: the user's own note, then the bundled one, then the
-    first sentence of its description."""
+    first sentence of its description (the only source for skills that came from somewhere else)."""
     for src in (user_notes or {}, NOTES):
         if n := src.get(name) or src.get(name.split(":")[-1]):
             return n
@@ -77,7 +96,11 @@ def scan(root: Path, prefix: str = "") -> list[dict]:
         return out
     for dirpath, dirs, files in os.walk(root):
         if "SKILL.md" in files:
-            s = mgr.parse(Path(dirpath) / "SKILL.md")
+            try:
+                s = mgr.parse(Path(dirpath) / "SKILL.md")
+            except OSError:  # unreadable file: skip that one skill rather than fail the whole list
+                dirs.clear()
+                continue
             s["name"] = prefix + s["name"]
             s["path"] = Path(dirpath)
             out.append(s)
@@ -86,13 +109,18 @@ def scan(root: Path, prefix: str = "") -> list[dict]:
 
 
 def claude_plugin_roots() -> list[tuple[Path, str]]:
+    """Skill folders of the enabled Claude Code plugins, as (folder, 'plugin:' prefix). Empty if there are none."""
     try:
-        installed = json.loads((HOME / ".claude/plugins/installed_plugins.json").read_text(encoding="utf-8"))["plugins"]
-        enabled = json.loads((HOME / ".claude/settings.json").read_text(encoding="utf-8")).get("enabledPlugins", {})
-    except (OSError, KeyError, ValueError):
+        installed = json.loads((mgr.CLAUDE_HOME / "plugins/installed_plugins.json").read_text(encoding="utf-8"))["plugins"]
+        enabled = json.loads((mgr.CLAUDE_HOME / "settings.json").read_text(encoding="utf-8")).get("enabledPlugins", {})
+    except (OSError, KeyError, ValueError, TypeError):
         return []
-    return [(Path(v[0]["installPath"]) / "skills", key.split("@")[0] + ":")
-            for key, v in installed.items() if enabled.get(key) and v]
+    roots = []
+    for key, entries in installed.items():
+        with contextlib.suppress(KeyError, IndexError, TypeError):
+            if enabled.get(key):
+                roots.append((Path(entries[0]["installPath"]) / "skills", key.split("@")[0] + ":"))
+    return roots
 
 
 def describe_origin(s: dict, kind: str, root: Path) -> None:
@@ -139,10 +167,8 @@ def collect(agent: str) -> list[dict]:
 def check() -> None:
     for a in AGENTS:
         skills = collect(a)
-        assert skills, f"no skills found for {a}"
         assert all(s["name"] and s["cat"] and s["note"] and s["origin"] for s in skills)
-        counts = Counter(s["cat"] for s in skills)
-        print(f"{a}: {len(skills)}", dict(counts))
+        print(f"{a}: {len(skills)}", dict(Counter(s["cat"] for s in skills)), "| folder:", mgr.AGENT_DIRS[a])
         print("   origin:", dict(Counter(s["origin"].split(" ·")[0] for s in skills)))
         print("   기타:", [s["name"] for s in skills if s["cat"] == OTHER])
 
@@ -157,14 +183,12 @@ def work_area() -> tuple[int, int, int, int]:
     return r.left, r.top, r.right, r.bottom
 
 
-def system_is_dark() -> bool:
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
-            return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
-    except OSError:
-        return False
+def load_bundled_fonts() -> int:
+    """Make ./fonts/*.otf|ttf usable by this process only (nothing is installed system-wide)."""
+    n = 0
+    for p in sorted((HERE / "fonts").glob("*.[ot]tf")):
+        n += bool(ctypes.windll.gdi32.AddFontResourceExW(str(p), 0x10, 0))  # FR_PRIVATE
+    return n
 
 
 def icon_image(size: int = 256):
@@ -205,24 +229,30 @@ class Scroll:
 
 
 class App:
-    W, H = 400, 640
+    W, H, RAIL = 900, 700, 230
 
     def __init__(self, with_tray: bool = True):
         with contextlib.suppress(AttributeError, OSError):
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        load_bundled_fonts()  # before Tk starts listing fonts
         self.root = root = tk.Tk()
         root.title("스킬 카탈로그")
         from PIL import ImageTk
         self._icon = ImageTk.PhotoImage(icon_image(64))  # keep a reference or Tk drops it
         root.iconphoto(True, self._icon)  # pyright: ignore[reportArgumentType]
-        root.attributes("-topmost", True, "-toolwindow", True)  # toolwindow: no taskbar button
-        root.resizable(False, True)
+        root.attributes("-topmost", True)
+        root.resizable(False, True)  # no maximize; minimize and close stay
+        self.family = FONT if FONT in tkfont.families(root) else FALLBACK_FONT
         self.scale = root.winfo_fpixels("1i") / 96
-        self.c = DARK if system_is_dark() else LIGHT
+        self.name_font = tkfont.Font(family=self.family, size=11, weight="bold", slant="roman")
+        self.tag_font = tkfont.Font(family=self.family, size=9, slant="roman")
+        self.theme = mgr.load_settings().get("theme", "light")  # light unless the user switched
+        self.c = DARK if self.theme == "dark" else LIGHT
         root.configure(bg=self.c["bg"])
         self.corner = "tr"
         self.visible = True
-        self.collapsed: set[str] = set()
+        self.cat: str | None = None  # category picked in the rail; None = all
+        self.shown: list[dict] = []
         self.updatable: set[Path] = set()
         self.data: dict[str, list[dict]] = {}
         self.agent = tk.StringVar(value=AGENTS[0])
@@ -234,6 +264,7 @@ class App:
         self._build()
         self.query.trace_add("write", lambda *_: self.render(top=True))
         root.protocol("WM_DELETE_WINDOW", self.hide if with_tray else self.quit)
+        root.bind("<Unmap>", self._on_unmap)
         root.bind_all("<MouseWheel>", self._wheel)
         self.load()
         self.place()
@@ -247,12 +278,23 @@ class App:
     def px(self, n: int) -> int:
         return int(n * self.scale)
 
-    def _label(self, parent, text="", size=9, bold=False, fg=None, bg=None, **kw):
-        return tk.Label(parent, text=text, font=(FONT, size, "bold" if bold else "normal"),
-                        fg=fg or self.c["text"], bg=bg or self.c["surface"], **kw)
+    def f(self, size: int = 11, bold: bool = False) -> tuple:
+        """Font spec. Always upright ('roman'); nothing in this app is ever italic."""
+        return (self.family, size, "bold" if bold else "normal", "roman")
+
+    def cat_colors(self, cat: str | None) -> tuple[str, str]:
+        """(text color, tint) for a category; None (= all) uses the app accent."""
+        if cat is None:
+            return self.c["accent"], self.c["soft"]
+        fg_l, soft_l, fg_d, soft_d = CAT_COLORS[cat]
+        return (fg_d, soft_d) if self.theme == "dark" else (fg_l, soft_l)
+
+    def _label(self, parent, text="", size=11, bold=False, fg=None, bg=None, **kw):
+        return tk.Label(parent, text=text, font=self.f(size, bold), fg=fg or self.c["text"],
+                        bg=bg or self.c["surface"], **kw)
 
     def _icon_button(self, parent, text, command, hint=""):
-        b = self._label(parent, text, 11, fg=self.c["muted"], cursor="hand2", padx=8, pady=2)
+        b = self._label(parent, text, 11, fg=self.c["muted"], cursor="hand2", padx=9, pady=3)
         b.bind("<Button-1>", lambda e: command())
         b.bind("<Enter>", lambda e: (b.config(bg=self.c["soft"], fg=self.c["accent"]), self.footer.config(text=hint)))
         b.bind("<Leave>", lambda e: (b.config(bg=self.c["surface"], fg=self.c["muted"]),
@@ -261,8 +303,8 @@ class App:
 
     def _button(self, parent, text, command, primary=False):
         c = self.c
-        return tk.Button(parent, text=text, command=command, font=(FONT, 9, "bold" if primary else "normal"),
-                         relief="flat", bd=0, padx=14, pady=6, cursor="hand2",
+        return tk.Button(parent, text=text, command=command, font=self.f(11, primary),
+                         relief="flat", bd=0, padx=16, pady=7, cursor="hand2",
                          bg=c["accent"] if primary else c["surface"], fg=c["on_accent"] if primary else c["text"],
                          activebackground=c["accent"] if primary else c["soft"],
                          activeforeground=c["on_accent"] if primary else c["accent"],
@@ -272,7 +314,7 @@ class App:
     def _check(self, parent, text, var, bg=None, **kw):
         c = self.c
         bg = bg or c["bg"]
-        return tk.Checkbutton(parent, text=text, variable=var, font=(FONT, 9), fg=c["text"], bg=bg,
+        return tk.Checkbutton(parent, text=text, variable=var, font=self.f(11), fg=c["text"], bg=bg,
                               activebackground=bg, activeforeground=c["text"], selectcolor=c["surface"],
                               anchor="w", bd=0, highlightthickness=0, cursor="hand2", **kw)
 
@@ -281,8 +323,8 @@ class App:
         box = tk.Frame(parent, bg=c["surface"], highlightthickness=1, highlightbackground=c["line"],
                        highlightcolor=c["accent"])
         e = tk.Entry(box, textvariable=var, relief="flat", bg=c["surface"], fg=c["text"],
-                     insertbackground=c["text"], font=(FONT, 9))
-        e.pack(fill="x", ipady=6, padx=8)
+                     insertbackground=c["text"], font=self.f(11))
+        e.pack(fill="x", ipady=7, padx=10)
         return box, e
 
     def _tab_bar(self, parent, names, on_pick):
@@ -293,9 +335,9 @@ class App:
         for n in names:
             cell = tk.Frame(bar, bg=c["surface"], cursor="hand2")
             cell.pack(side="left", expand=True, fill="x")
-            lab = self._label(cell, n, 9, pady=8)
+            lab = self._label(cell, n, 11, pady=10)
             lab.pack(fill="x")
-            underline = tk.Frame(cell, height=2, bg=c["surface"])
+            underline = tk.Frame(cell, height=3, bg=c["surface"])
             underline.pack(fill="x")
             for w in (cell, lab):
                 w.bind("<Button-1>", lambda e, n=n: on_pick(n))
@@ -304,8 +346,7 @@ class App:
         def restyle(selected, texts=None):
             for n, (lab, underline) in cells.items():
                 on = n == selected
-                lab.config(text=(texts or {}).get(n, n), fg=c["accent"] if on else c["muted"],
-                           font=(FONT, 9, "bold" if on else "normal"))
+                lab.config(text=(texts or {}).get(n, n), fg=c["accent"] if on else c["muted"], font=self.f(11, on))
                 underline.config(bg=c["accent"] if on else c["surface"])
         return bar, restyle
 
@@ -314,16 +355,17 @@ class App:
         header = tk.Frame(self.root, bg=c["surface"])
         header.pack(fill="x")
         titles = tk.Frame(header, bg=c["surface"])
-        titles.pack(side="left", padx=(16, 0), pady=(12, 10))
-        self._label(titles, "스킬 카탈로그", 11, bold=True).pack(anchor="w")
-        self.subtitle = self._label(titles, "", 8, fg=c["muted"])
+        titles.pack(side="left", padx=(18, 0), pady=(14, 12))
+        self._label(titles, "스킬 카탈로그", 16, bold=True).pack(anchor="w")
+        self.subtitle = self._label(titles, "", 10, fg=c["muted"])
         self.subtitle.pack(anchor="w")
         actions = tk.Frame(header, bg=c["surface"])
-        actions.pack(side="right", padx=(0, 6))
+        actions.pack(side="right", padx=(0, 8))
         # created before self.footer exists; the hint handlers only touch it when the pointer is over a button
-        for text, cmd, hint in (("＋", self.add_dialog, "스킬 추가 (링크로 설치 · 새로 만들기)"),
-                                ("⇧", lambda: self.check_updates(), "git으로 받은 스킬의 업데이트 확인"),
+        for text, cmd, hint in (("＋ 추가", self.add_dialog, "스킬 추가 (링크로 설치 · 새로 만들기)"),
+                                ("⇧ 업데이트", lambda: self.check_updates(), "git으로 받은 스킬의 업데이트 확인"),
                                 ("⟳", self.load, "목록 새로고침"),
+                                ("라이트" if self.theme == "dark" else "다크", self.toggle_theme, "밝은/어두운 화면 전환"),
                                 ("⇄", self.move, "창 위치 전환 (우상단 ↔ 좌하단)"),
                                 ("–", self.hide, "트레이로 숨기기")):
             self._icon_button(actions, text, cmd, hint).pack(side="left")
@@ -332,30 +374,33 @@ class App:
         self.tabs.pack(fill="x")
         tk.Frame(self.root, height=1, bg=c["line"]).pack(fill="x")
 
-        search = tk.Frame(self.root, bg=c["bg"])
-        search.pack(fill="x", padx=12, pady=(10, 4))
-        box = tk.Frame(search, bg=c["surface"], highlightthickness=1, highlightbackground=c["line"],
-                       highlightcolor=c["accent"])
-        box.pack(fill="x")
-        self._label(box, "검색", 8, fg=c["muted"], padx=8).pack(side="left")
-        self.entry = tk.Entry(box, textvariable=self.query, relief="flat", bg=c["surface"], fg=c["text"],
-                              insertbackground=c["text"], font=(FONT, 9))
-        self.entry.pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 8))
-
-        meta = tk.Frame(self.root, bg=c["bg"])
-        meta.pack(fill="x", padx=14, pady=(2, 4))
-        self.count = self._label(meta, "", 8, fg=c["muted"], bg=c["bg"])
-        self.count.pack(side="left")
-        self.fold = self._label(meta, "", 8, fg=c["accent"], bg=c["bg"], cursor="hand2")
-        self.fold.pack(side="right")
-        self.fold.bind("<Button-1>", lambda e: self.toggle_all())
-
-        self.footer = self._label(self.root, DEFAULT_HINT, 8, fg=c["muted"], bg=c["bg"], anchor="w", padx=14, pady=6)
+        self.footer = self._label(self.root, DEFAULT_HINT, 10, fg=c["muted"], bg=c["bg"], anchor="w", padx=16, pady=7)
         self.footer.pack(side="bottom", fill="x")
         tk.Frame(self.root, height=1, bg=c["line"]).pack(side="bottom", fill="x")
 
-        self.list = Scroll(self.root, c)
-        self.list.wrap.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        body = tk.Frame(self.root, bg=c["bg"])
+        body.pack(fill="both", expand=True)
+        self.rail = tk.Frame(body, bg=c["rail"], width=self.px(self.RAIL))
+        self.rail.pack(side="left", fill="y")
+        self.rail.pack_propagate(False)
+        tk.Frame(body, width=1, bg=c["line"]).pack(side="left", fill="y")
+        main = tk.Frame(body, bg=c["bg"])
+        main.pack(side="left", fill="both", expand=True)
+
+        search = tk.Frame(main, bg=c["bg"])
+        search.pack(fill="x", padx=14, pady=(12, 4))
+        box = tk.Frame(search, bg=c["surface"], highlightthickness=1, highlightbackground=c["line"],
+                       highlightcolor=c["accent"])
+        box.pack(fill="x")
+        self._label(box, "검색", 10, fg=c["muted"], padx=10).pack(side="left")
+        self.entry = tk.Entry(box, textvariable=self.query, relief="flat", bg=c["surface"], fg=c["text"],
+                              insertbackground=c["text"], font=self.f(11))
+        self.entry.pack(side="left", fill="x", expand=True, ipady=7, padx=(0, 10))
+        self.count = self._label(main, "", 10, fg=c["muted"], bg=c["bg"], anchor="w")
+        self.count.pack(fill="x", padx=16, pady=(2, 4))
+
+        self.list = Scroll(main, c)
+        self.list.wrap.pack(fill="both", expand=True, padx=14, pady=(0, 12))
         self.canvas, self.body = self.list.canvas, self.list.body
 
     def _wheel(self, e) -> None:
@@ -370,12 +415,22 @@ class App:
             scroller.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
 
     def _dark_titlebar(self, win=None) -> None:
-        if self.c is DARK:
-            try:
-                hwnd = ctypes.windll.user32.GetParent((win or self.root).winfo_id())
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(ctypes.c_int(1)), 4)
-            except (AttributeError, OSError):
-                pass
+        with contextlib.suppress(AttributeError, OSError):
+            hwnd = ctypes.windll.user32.GetParent((win or self.root).winfo_id())
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(ctypes.c_int(self.theme == "dark")), 4)
+
+    def toggle_theme(self) -> None:
+        self.theme = "light" if self.theme == "dark" else "dark"
+        self.c = DARK if self.theme == "dark" else LIGHT
+        mgr.save_setting("theme", self.theme)
+        if self.dialog and self.dialog.win.winfo_exists():
+            self.dialog.close()
+        for w in self.root.winfo_children():
+            w.destroy()
+        self.root.configure(bg=self.c["bg"])
+        self._build()
+        self._dark_titlebar()
+        self.render()
 
     def say(self, text: str, warn: bool = False, ms: int = 4000) -> None:
         """Footer message that falls back to the default hint."""
@@ -402,76 +457,101 @@ class App:
 
     def set_agent(self, name: str) -> None:
         self.agent.set(name)
+        self.cat = None
         self.render(top=True)
 
-    def toggle_all(self) -> None:
-        cats = {s["cat"] for s in self.data[self.agent.get()]}
-        self.collapsed = set() if self.collapsed >= cats else cats
-        self.render()
+    def pick(self, cat: str | None) -> None:
+        self.cat = cat
+        self.render(top=True)
 
     def render(self, top: bool = False) -> None:
         c, agent = self.c, self.agent.get()
         q = self.query.get().strip().lower()
-        skills = [s for s in self.data.get(agent, [])
-                  if q in " ".join((s["name"], s["note"], s["desc"], s["origin"])).lower()]
-        self.list.clear()
+        everything = self.data.get(agent, [])
+        found = [s for s in everything if q in " ".join((s["name"], s["note"], s["desc"], s["origin"])).lower()]
+        counts = Counter(s["cat"] for s in found)
+        if self.cat not in counts:  # the picked category vanished (search or refresh)
+            self.cat = None
+        self.shown = [s for s in found if self.cat in (None, s["cat"])]
         self._restyle_tabs(agent, {a: f"{a}  {len(self.data.get(a, []))}" for a in AGENTS})
         self.subtitle.config(text=f"{agent}에서 사용할 수 있는 스킬")
-        self.count.config(text=f"{len(skills)}개 스킬" + (f" · '{q}' 검색 결과" if q else ""))
-        cats = {s["cat"] for s in self.data.get(agent, [])}
-        self.fold.config(text="" if q else ("모두 펼치기" if self.collapsed >= cats else "모두 접기"))
+        self._draw_rail(counts, len(found))
+        self.count.config(text=f"{len(self.shown)}개 스킬" + (f" · '{q}' 검색 결과" if q else ""))
+        self.list.clear()
         for cat in [n for n, _ in CATEGORIES] + [OTHER]:
-            items = [s for s in skills if s["cat"] == cat]
-            if not items:
-                continue
-            folded = cat in self.collapsed and not q
-            self._section(cat, len(items), folded)
-            if not folded:
+            items = [s for s in self.shown if s["cat"] == cat]
+            if items:
+                self._section(cat, len(items))
                 for s in items:
                     self._row(s)
-        if not skills:
-            self._label(self.body, "일치하는 스킬이 없습니다", 9, fg=c["muted"], pady=30).pack(fill="x")
+        if not self.shown:
+            msg = ("일치하는 스킬이 없습니다" if everything else
+                   f"{agent}에 설치된 스킬이 없습니다.\n\n{mgr.AGENT_DIRS[agent]}\n\n위의 ＋ 추가에서 설치할 수 있습니다.")
+            self._label(self.body, msg, 11, fg=c["muted"], pady=40, padx=20, justify="center").pack(fill="x")
         if top:
             self.canvas.yview_moveto(0)
 
-    def _section(self, cat: str, n: int, folded: bool) -> None:
+    def _draw_rail(self, counts: Counter, total: int) -> None:
         c = self.c
-        f = tk.Frame(self.body, bg=c["bg"], cursor="hand2")
-        f.pack(fill="x")
-        chevron = self._label(f, "▸" if folded else "▾", 8, fg=c["muted"], bg=c["bg"], padx=10)
-        chevron.pack(side="left", pady=6)
-        title = self._label(f, cat, 9, bold=True, bg=c["bg"])
-        title.pack(side="left")
-        self._label(f, str(n), 8, fg=c["muted"], bg=c["bg"], padx=8).pack(side="left")
-        for w in (f, chevron, title):
-            w.bind("<Button-1>", lambda e, cat=cat: self._fold(cat))
-        tk.Frame(self.body, height=1, bg=c["line"]).pack(fill="x")
+        for w in self.rail.winfo_children():
+            w.destroy()
+        self._label(self.rail, "카테고리", 10, fg=c["muted"], bg=c["rail"], anchor="w", padx=16, pady=10).pack(fill="x")
+        for cat, n in [(None, total)] + [(k, counts[k]) for k in [n for n, _ in CATEGORIES] + [OTHER] if counts[k]]:
+            fg, soft = self.cat_colors(cat)
+            on = cat == self.cat
+            row = tk.Frame(self.rail, bg=soft if on else c["rail"], cursor="hand2")
+            row.pack(fill="x", pady=1)
+            bar = tk.Frame(row, width=self.px(6), bg=fg)
+            bar.pack(side="left", fill="y")
+            name = self._label(row, cat or "전체", 11, bold=on, fg=fg if on else c["text"], bg=row["bg"], pady=9)
+            name.pack(side="left", padx=(12, 4))
+            chip = self._label(row, str(n), 10, bold=True, fg=fg, bg=c["surface"] if on else soft, padx=8)
+            chip.pack(side="right", padx=12)
+            for w in (row, bar, name, chip):
+                w.bind("<Button-1>", lambda e, cat=cat: self.pick(cat))
 
-    def _fold(self, cat: str) -> None:
-        self.collapsed ^= {cat}
-        self.render()
+    def _section(self, cat: str, n: int) -> None:
+        fg, soft = self.cat_colors(cat)
+        f = tk.Frame(self.body, bg=soft)
+        f.pack(fill="x")
+        tk.Frame(f, width=self.px(6), bg=fg).pack(side="left", fill="y")
+        self._label(f, cat, 12, bold=True, fg=fg, bg=soft, pady=8, padx=12).pack(side="left")
+        self._label(f, f"{n}개", 10, fg=fg, bg=soft, padx=8).pack(side="right")
+
+    def _fit(self, text: str, room: int) -> str:
+        """Shorten text with an ellipsis so it fits in `room` pixels at the row-name font (full name stays in the copy menu)."""
+        while len(text) > 1 and self.name_font.measure(text) > room:
+            text = text.rstrip("…")[:-1] + "…"
+        return text
 
     def _row(self, s: dict) -> None:
         c = self.c
-        f = tk.Frame(self.body, bg=c["surface"], cursor="hand2")
-        f.pack(fill="x")
+        fg, _ = self.cat_colors(s["cat"])
+        wrap = tk.Frame(self.body, bg=c["surface"], cursor="hand2")
+        wrap.pack(fill="x")
+        tk.Frame(wrap, width=self.px(6), bg=fg).pack(side="left", fill="y")
+        f = tk.Frame(wrap, bg=c["surface"], cursor="hand2")
+        f.pack(side="left", fill="x", expand=True)
         top = tk.Frame(f, bg=c["surface"])
-        top.pack(fill="x", padx=(16, 8), pady=(7, 0))
-        more = self._label(top, "⋯", 11, fg=c["muted"], padx=6)  # right-hand items are packed first so a long name can't push them out
+        top.pack(fill="x", padx=(14, 8), pady=(9, 0))
+        more = self._label(top, "⋯", 13, fg=c["muted"], padx=8)  # right-hand items are packed first so a long name can't push them out
         more.pack(side="right")
-        tag = self._label(top, s["origin"], 7, fg=c["muted"])
+        tag = self._label(top, s["origin"], 9, fg=c["muted"])
         tag.pack(side="right")
-        name = self._label(top, s["name"], 9, bold=True, anchor="w", justify="left", wraplength=self.px(self.W - 210))
+        # room left for the name once the tag, the ⋯ button and any badges are placed (badge widths are estimates)
+        inner = self.px(self.W - self.RAIL - 28 - 6 - 22)
+        room = inner - self.tag_font.measure(s["origin"]) - self.px(40)
+        room -= self.px(46) * bool(s["manual"]) + self.px(88) * (s["repo"] in self.updatable)
+        name = self._label(top, self._fit(s["name"], room), 11, bold=True, anchor="w")
         name.pack(side="left")
         if s["manual"]:
-            self._label(top, "수동", 7, fg=c["warn_fg"], bg=c["warn_bg"], padx=5).pack(side="left", padx=6)
+            self._label(top, "수동", 9, fg=c["warn_fg"], bg=c["warn_bg"], padx=6).pack(side="left", padx=8)
         if s["repo"] in self.updatable:
-            self._label(top, "업데이트 있음", 7, fg=c["on_accent"], bg=c["accent"], padx=5).pack(side="left", padx=2)
-        note = self._label(f, s["note"], 8, fg=c["muted"], anchor="w", justify="left",
-                           wraplength=self.px(self.W - 64))
-        note.pack(fill="x", padx=(16, 12), pady=(1, 7))
-        tk.Frame(self.body, height=1, bg=c["line"]).pack(fill="x", padx=(16, 0))
-        parts = (f, top, name, tag, more, note)
+            self._label(top, "업데이트 있음", 9, bold=True, fg=c["on_accent"], bg=c["accent"], padx=6).pack(side="left", padx=2)
+        note = self._label(f, s["note"], 10, fg=c["muted"], anchor="w", justify="left", wraplength=inner - self.px(28))
+        note.pack(fill="x", padx=(14, 12), pady=(2, 9))
+        tk.Frame(self.body, height=1, bg=c["line"]).pack(fill="x")
+        parts = (wrap, f, top, name, tag, more, note)
 
         def tint(color):
             for w in parts:
@@ -482,7 +562,6 @@ class App:
             w.bind("<Button-1>", lambda e, n=s["name"]: self.copy(n))
             w.bind("<Button-3>", lambda e, s=s: self.row_menu(s, e.x_root, e.y_root))
         more.bind("<Button-1>", lambda e, s=s: self.row_menu(s, e.x_root, e.y_root))
-        more.config(cursor="hand2")
 
     def copy(self, name: str) -> None:
         self.root.clipboard_clear()
@@ -493,18 +572,17 @@ class App:
     def build_menu(self, s: dict) -> tk.Menu:
         c = self.c
         m = tk.Menu(self.root, tearoff=0, bg=c["surface"], fg=c["text"], activebackground=c["soft"],
-                    activeforeground=c["accent"], bd=0, font=(FONT, 9))
+                    activeforeground=c["accent"], bd=0, font=self.f(11))
         m.add_command(label="이름 복사", command=lambda: self.copy(s["name"]))
         m.add_command(label="용도 설명 수정…", command=lambda: self.edit_note(s))
         m.add_command(label="SKILL.md 열어서 수정" if s["managed"] else "SKILL.md 열기 (보기)",
                       command=lambda: self.edit_file(s))
+        m.add_separator()
         if s["managed"]:
-            m.add_separator()
             if s["repo"]:
                 m.add_command(label="이 스킬의 저장소 업데이트 확인", command=lambda: self.check_updates([s["repo"]]))
             m.add_command(label="삭제…", command=lambda: self.delete(s))
         else:
-            m.add_separator()
             m.add_command(label=f"{s['origin']} 제공 스킬이라 여기서 삭제할 수 없습니다", state="disabled")
         return m
 
@@ -614,7 +692,7 @@ class App:
 
     def place(self) -> None:
         left, top, right, bottom = work_area()
-        w, h = self.px(self.W), min(self.px(self.H), bottom - top - 24)
+        w, h = min(self.px(self.W), right - left - 24), min(self.px(self.H), bottom - top - 24)
         x = right - w - 12 if self.corner == "tr" else left + 12
         y = top + 12 if self.corner == "tr" else bottom - h - 12
         self.root.geometry(f"{w}x{h}+{x}+{y}")
@@ -634,6 +712,10 @@ class App:
     def hide(self) -> None:
         self.root.withdraw()
         self.visible = False
+
+    def _on_unmap(self, e) -> None:
+        if e.widget is self.root and self.root.state() == "iconic":  # the minimize button: go to the tray, not the taskbar
+            self.hide()
 
     def toggle(self) -> None:
         self.hide() if self.visible else self.show()
@@ -676,7 +758,7 @@ class App:
 
 class AddDialog:
     """Install skills from a link, or create a new one. Both tabs link into the agents you tick."""
-    W, H = 460, 640
+    W, H = 540, 720
 
     def __init__(self, app: App):
         self.app, c = app, app.c
@@ -688,7 +770,7 @@ class AddDialog:
         w, h = app.px(self.W), min(app.px(self.H), win.winfo_screenheight() - 80)
         rx, ry = app.root.winfo_x(), app.root.winfo_y()
         x = rx - w - 12 if rx > w + 24 else rx + app.root.winfo_width() + 12  # beside the panel, not over it
-        win.geometry(f"{w}x{h}+{x}+{ry}")
+        win.geometry(f"{w}x{h}+{max(x, 0)}+{ry}")
         app._dark_titlebar(win)
         self.mode = "link"
         self.picks: dict[Path, tk.BooleanVar] = {}
@@ -697,7 +779,7 @@ class AddDialog:
         bar.pack(fill="x")
         tk.Frame(win, height=1, bg=c["line"]).pack(fill="x")
         self.panel = tk.Frame(win, bg=c["bg"])
-        self.panel.pack(fill="both", expand=True, padx=12, pady=10)
+        self.panel.pack(fill="both", expand=True, padx=14, pady=12)
         win.protocol("WM_DELETE_WINDOW", self.close)
         self.show("링크로 설치")
 
@@ -711,10 +793,10 @@ class AddDialog:
     def _agent_checks(self) -> None:
         app, c = self.app, self.app.c
         row = tk.Frame(self.panel, bg=c["bg"])
-        row.pack(side="bottom", fill="x", pady=(6, 0))
-        app._label(row, "설치할 에이전트", 8, fg=c["muted"], bg=c["bg"]).pack(anchor="w")
+        row.pack(side="bottom", fill="x", pady=(8, 0))
+        app._label(row, "설치할 에이전트", 10, fg=c["muted"], bg=c["bg"]).pack(anchor="w")
         for a, var in self.agents.items():
-            app._check(row, a, var).pack(side="left", padx=(0, 10))
+            app._check(row, a, var).pack(side="left", padx=(0, 12))
 
     def show(self, tab: str) -> None:
         for w in self.panel.winfo_children():
@@ -734,21 +816,21 @@ class AddDialog:
         e.bind("<Return>", lambda ev: self.load_link())
         e.focus_set()
         app._button(row, "불러오기", self.load_link, primary=True).pack(side="left", padx=(8, 0))
-        app._label(p, "GitHub 저장소·폴더·SKILL.md 링크 또는 owner/repo[/경로]", 8, fg=c["muted"], bg=c["bg"],
-                   anchor="w").pack(fill="x", pady=(4, 0))
-        self.status = app._label(p, "", 8, fg=c["muted"], bg=c["bg"], anchor="w", justify="left",
-                                 wraplength=app.px(self.W - 40))
-        self.status.pack(fill="x", pady=(4, 2))
+        app._label(p, "GitHub 저장소·폴더·SKILL.md 링크 또는 owner/repo[/경로]", 10, fg=c["muted"], bg=c["bg"],
+                   anchor="w").pack(fill="x", pady=(5, 0))
+        self.status = app._label(p, "", 10, fg=c["muted"], bg=c["bg"], anchor="w", justify="left",
+                                 wraplength=app.px(self.W - 50))
+        self.status.pack(fill="x", pady=(5, 3))
         # bottom-up so the list can take the remaining space
         btns = tk.Frame(p, bg=c["bg"])
-        btns.pack(side="bottom", fill="x", pady=(8, 0))
+        btns.pack(side="bottom", fill="x", pady=(10, 0))
         self.install_btn = app._button(btns, "선택한 스킬 설치", self.do_install, primary=True)
         self.install_btn.pack(side="right")
         self.install_btn.config(state="disabled")
         app._button(btns, "닫기", self.close).pack(side="right", padx=8)
         app._label(p, "⚠ 스킬은 에이전트가 그대로 따르는 지시문이며 스크립트를 포함할 수 있습니다. "
-                      "신뢰할 수 있는 출처만 설치하세요.", 8, fg=c["warn_fg"], bg=c["bg"], anchor="w", justify="left",
-                   wraplength=app.px(self.W - 40)).pack(side="bottom", fill="x", pady=(6, 0))
+                      "신뢰할 수 있는 출처만 설치하세요.", 10, fg=c["warn_fg"], bg=c["bg"], anchor="w", justify="left",
+                   wraplength=app.px(self.W - 50)).pack(side="bottom", fill="x", pady=(8, 0))
         self.replace = tk.BooleanVar(value=False)
         app._check(p, "같은 이름이 있으면 교체 (기존 것은 휴지통 폴더에 백업)", self.replace).pack(side="bottom", fill="x")
         self._agent_checks()
@@ -783,19 +865,19 @@ class AddDialog:
         self.say(f"스킬 {len(found)}개를 찾았습니다. 설치할 것을 고르세요.")
         if len(found) > 1:
             head = tk.Frame(self.results.body, bg=c["surface"])
-            head.pack(fill="x", padx=10, pady=(6, 0))
+            head.pack(fill="x", padx=10, pady=(8, 0))
             for text, val in (("전체 선택", True), ("전체 해제", False)):
-                lab = app._label(head, text, 8, fg=c["accent"], cursor="hand2", padx=4)
+                lab = app._label(head, text, 10, bold=True, fg=c["accent"], cursor="hand2", padx=4)
                 lab.pack(side="left")
                 lab.bind("<Button-1>", lambda e, v=val: [x.set(v) for x in self.picks.values()])
         notes = mgr.load_notes()
         for d, var in self.picks.items():
             info = mgr.parse(d / "SKILL.md")
             row = tk.Frame(self.results.body, bg=c["surface"])
-            row.pack(fill="x", padx=10, pady=(6, 0))
+            row.pack(fill="x", padx=10, pady=(8, 0))
             app._check(row, d.name, var, bg=c["surface"]).pack(anchor="w")
-            app._label(row, brief(d.name, info["desc"], notes), 8, fg=c["muted"], anchor="w", justify="left",
-                       wraplength=app.px(self.W - 90)).pack(fill="x", padx=(24, 0))
+            app._label(row, brief(d.name, info["desc"], notes), 10, fg=c["muted"], anchor="w", justify="left",
+                       wraplength=app.px(self.W - 100)).pack(fill="x", padx=(26, 0))
         self.install_btn.config(state="normal")
 
     def do_install(self) -> None:
@@ -828,19 +910,19 @@ class AddDialog:
     def _build_new(self) -> None:
         app, c, p = self.app, self.app.c, self.panel
         self.name, self.desc = tk.StringVar(), tk.StringVar()
-        app._label(p, "스킬 이름 (영문·숫자·-_. , 예: my-skill)", 8, fg=c["muted"], bg=c["bg"], anchor="w").pack(fill="x")
+        app._label(p, "스킬 이름 (영문·숫자·-_. , 예: my-skill)", 10, fg=c["muted"], bg=c["bg"], anchor="w").pack(fill="x")
         box, e = app._entry(p, self.name)
-        box.pack(fill="x", pady=(2, 10))
+        box.pack(fill="x", pady=(3, 12))
         e.focus_set()
-        app._label(p, "한 줄 설명 (에이전트가 언제 쓸지 판단하는 문장)", 8, fg=c["muted"], bg=c["bg"], anchor="w").pack(fill="x")
+        app._label(p, "한 줄 설명 (에이전트가 언제 쓸지 판단하는 문장)", 10, fg=c["muted"], bg=c["bg"], anchor="w").pack(fill="x")
         box, e2 = app._entry(p, self.desc)
-        box.pack(fill="x", pady=(2, 10))
+        box.pack(fill="x", pady=(3, 12))
         e2.bind("<Return>", lambda ev: self.do_create())
-        self.status = app._label(p, "", 8, fg=c["muted"], bg=c["bg"], anchor="w", justify="left",
-                                 wraplength=app.px(self.W - 40))
+        self.status = app._label(p, "", 10, fg=c["muted"], bg=c["bg"], anchor="w", justify="left",
+                                 wraplength=app.px(self.W - 50))
         self.status.pack(fill="x")
         btns = tk.Frame(p, bg=c["bg"])
-        btns.pack(side="bottom", fill="x", pady=(8, 0))
+        btns.pack(side="bottom", fill="x", pady=(10, 0))
         app._button(btns, "만들고 편집기 열기", self.do_create, primary=True).pack(side="right")
         app._button(btns, "닫기", self.close).pack(side="right", padx=8)
         self._agent_checks()
@@ -873,6 +955,6 @@ if __name__ == "__main__":
     if "--check" in sys.argv:
         check()
     elif "--make-icon" in sys.argv:
-        make_ico(Path(__file__).with_name("skill_viewer.ico"))
+        make_ico(HERE / "skill_viewer.ico")
     elif not already_running():
         App().run(hidden="--hidden" in sys.argv)
