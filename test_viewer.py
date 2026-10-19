@@ -232,6 +232,47 @@ class PanelTest(unittest.TestCase):
             render.assert_called_once()
         app.render()
 
+    def test_03e_star_list_is_per_agent_saved_and_always_in_the_rail(self):
+        app = self.app
+        app.set_agent("Claude Code")
+        app.query.set("")
+        names = texts(app.rail)
+        self.assertEqual((names[1], names[3]), (v.STAR, "전체"))  # the star entry sits above "전체", and shows at 0
+        self.assertEqual(names[2], "0")
+        gs = find(app, "Claude Code", "gitskill")
+        self.assertEqual(app.build_menu(gs).entrycget(1, "label"), "★ 자주 쓰는 스킬에 추가")
+        icon = app.icons["gitskill"][0]
+        self.assertEqual(icon.cget("text"), "☆")  # every row has the icon, hollow until starred
+        before = dict(app.sections)
+        app.toggle_pin(gs)
+        self.assertEqual(icon.cget("text"), "★")
+        self.assertEqual(app.sections, before)  # the icon was repainted in place; no group was rebuilt
+        self.assertEqual(mgr.load_settings()["pins"]["Claude Code"], ["gitskill"])  # saved
+        self.assertEqual(v.load_pins()["Claude Code"], {"gitskill"})
+        self.assertEqual(app.pins["Codex"], set())  # another agent's list is separate
+        self.assertEqual(app.build_menu(gs).entrycget(1, "label"), "★ 자주 쓰는 스킬에서 해제")
+        app.pick(v.STAR)
+        self.assertEqual([s["name"] for s in app.shown], ["gitskill"])
+        self.assertIn(gs["cat"], texts(app.body))  # the star list names each skill's own category
+        app.toggle_pin(gs)
+        self.assertEqual((app.shown, app.cat), ([], v.STAR))  # stays on the star list; nothing starred
+        self.assertIn("아직 지정한 스킬이 없습니다", "".join(texts(app.body)))
+        self.assertEqual(texts(app.rail)[1], v.STAR)  # the entry stays at 0
+        app.set_agent("Claude Code")
+
+    @unittest.skipUnless(plat.WIN, "the one synthetic click is only checked on Windows")
+    def test_03f_clicking_the_star_icon_stars_the_skill_without_copying_its_name(self):
+        app = self.app
+        app.set_agent("Claude Code")
+        icon = app.icons["gitskill"][0]
+        app.copy("sentinel")
+        app.root.update()  # a widget that isn't mapped yet ignores events
+        icon.event_generate("<Button-1>", x=2, y=2)
+        self.assertEqual((icon.cget("text"), app.root.clipboard_get()), ("★", "sentinel"))
+        self.assertIn("gitskill", app.pins["Claude Code"])
+        icon.event_generate("<Button-1>", x=2, y=2)  # a second click takes it back
+        self.assertEqual(icon.cget("text"), "☆")
+
     def test_04_menu_entries(self):
         app = self.app
         menu = app.build_menu(find(app, "Codex", "legacy"))
@@ -574,6 +615,14 @@ class DiscoveryTest(unittest.TestCase):
             finally:
                 plat.unlink_dir(agent / "alpha")
                 plat.unlink_dir(agent / "loop")
+
+    def test_pins_tolerate_odd_settings(self):
+        empty = {a: set() for a in v.AGENTS}
+        for odd in (None, "junk", [], {"Codex": "abc"}):
+            with mock.patch.object(mgr, "load_settings", return_value={"pins": odd}):
+                self.assertEqual(v.load_pins(), empty)
+        with mock.patch.object(mgr, "load_settings", return_value={"pins": {"Codex": [1, "x"]}}):
+            self.assertEqual(v.load_pins()["Codex"], {"x"})
 
     def test_odd_skill_files_do_not_break_the_list(self):
         with tempfile.TemporaryDirectory() as t:
