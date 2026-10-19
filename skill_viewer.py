@@ -91,7 +91,14 @@ def scan(root: Path, prefix: str = "") -> list[dict]:
     out = []
     if not root.is_dir():
         return out
-    for dirpath, dirs, files in os.walk(root):
+    seen: set[str] = set()
+    # follow links: on macOS installed skills are symlinks, which os.walk would otherwise list but never enter
+    for dirpath, dirs, files in os.walk(root, followlinks=True):
+        real = os.path.realpath(dirpath)
+        if real in seen:  # a link pointing back up the tree would make the walk endless
+            dirs.clear()
+            continue
+        seen.add(real)
         if "SKILL.md" in files:
             try:
                 s = mgr.parse(Path(dirpath) / "SKILL.md")
@@ -738,8 +745,10 @@ class App:
         self.visible = False
 
     def _on_unmap(self, e) -> None:
-        if e.widget is self.root and self.root.state() == "iconic":  # the minimize button: go to the tray, not the taskbar
-            self.hide()
+        # the minimize button: go to the tray, not the taskbar / Dock. macOS reports 'iconic' only after the
+        # unmap event, so look a moment later.
+        if e.widget is self.root:
+            self.root.after(150, lambda: self.hide() if self.root.state() == "iconic" else None)
 
     def toggle(self) -> None:
         self.hide() if self.visible else self.show()

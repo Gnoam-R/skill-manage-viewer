@@ -58,6 +58,9 @@ class PanelTest(unittest.TestCase):
         for p in cls._patches:
             p.start()
         write_skill(t / "codex/legacy")  # a real folder the user made by hand
+        # so the Claude tab has several categories and a read-only skill even on a clean CI machine without plugins
+        write_skill(t / "claude/tdd")
+        write_skill(t / "claude/synced/app/grilling")  # nested = synced by the desktop app = view only
         cls.repo = t / "gitrepo"  # a git-backed skill linked into Claude Code
         write_skill(cls.repo / "skills/gitskill")
         git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
@@ -516,6 +519,22 @@ class CategoryTest(unittest.TestCase):
 
 class DiscoveryTest(unittest.TestCase):
     """What happens on someone else's PC: other layouts, missing agents, broken files. No Tk needed."""
+
+    def test_linked_skills_are_listed_and_link_loops_do_not_hang(self):
+        # macOS CI caught this: installed skills are symlinks there, and os.walk does not enter them by default
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            source = t / "source/alpha"
+            write_skill(source)
+            agent = t / "agent"
+            agent.mkdir()
+            plat.make_dir_link(agent / "alpha", source)
+            plat.make_dir_link(agent / "loop", agent)  # points back up the tree
+            try:
+                self.assertEqual([s["name"] for s in v.scan(agent)], ["alpha"])
+            finally:
+                plat.unlink_dir(agent / "alpha")
+                plat.unlink_dir(agent / "loop")
 
     def test_odd_skill_files_do_not_break_the_list(self):
         with tempfile.TemporaryDirectory() as t:

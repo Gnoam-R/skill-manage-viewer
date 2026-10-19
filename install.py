@@ -42,12 +42,14 @@ def make_shortcut(lnk: Path, python: Path, args: str) -> None:
         ]
     )
     lnk.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    r = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.b64encode(script.encode("utf-16-le")).decode()],
-        check=True,
         capture_output=True,
+        text=True,
         creationflags=plat.NO_WINDOW,
     )
+    if r.returncode or not lnk.exists():
+        raise RuntimeError(f"바로 가기를 만들지 못했습니다: {lnk}\n{(r.stderr or r.stdout).strip()}")
 
 
 def windowless(python: Path) -> Path:
