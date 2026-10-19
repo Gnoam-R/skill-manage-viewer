@@ -58,11 +58,16 @@ def open_path(path: Path) -> None:
 
 
 def open_folder(path: Path) -> None:
-    """Show a folder in Explorer / Finder."""
+    """Show a folder in Explorer / Finder without "opening" it: a skill folder from a downloaded repo may be
+    named like `x.app`, which `open`/the shell's default verb would launch instead of showing."""
+    if not path.is_dir():
+        return
     if WIN:
-        os.startfile(path)  # type: ignore[attr-defined]
+        subprocess.Popen(["explorer", str(path)])
+    elif MAC:
+        subprocess.Popen(["open", "-R", str(path)])  # -R: reveal in Finder, never launch
     else:
-        subprocess.Popen(["open" if MAC else "xdg-open", str(path)])
+        subprocess.Popen(["xdg-open", str(path)])
 
 
 # ---- screen --------------------------------------------------------------------------------------

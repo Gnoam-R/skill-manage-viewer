@@ -611,6 +611,18 @@ class PlatformTest(unittest.TestCase):
     def test_font_scale_keeps_sizes_comparable(self):
         self.assertAlmostEqual(plat.FONT_SCALE, 4 / 3 if plat.MAC else 1.0)
 
+    def test_open_folder_only_reveals_and_never_launches(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(plat.subprocess, "Popen") as popen:
+            app_like = Path(t) / "evil.app"  # a skill folder name a downloaded repo could use
+            app_like.mkdir()
+            plat.open_folder(app_like)
+            cmd = popen.call_args[0][0]
+            expected = ["explorer"] if plat.WIN else ["open", "-R"] if plat.MAC else ["xdg-open"]
+            self.assertEqual(cmd[:-1], expected)
+            popen.reset_mock()
+            plat.open_folder(Path(t) / "missing")  # not a folder: nothing is started
+            popen.assert_not_called()
+
 
 class CategoryTest(unittest.TestCase):
     def test_every_skill_is_in_exactly_one_category(self):
