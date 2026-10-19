@@ -1,217 +1,347 @@
-# skill-manage-viewer
+# 스킬 카탈로그 (skill-manage-viewer)
 
-내 PC에 설치된 AI 에이전트 스킬(Claude Code · Codex · Antigravity)을 한 화면에서 보고 관리하는 **Windows·macOS** 트레이(메뉴 막대) 프로그램입니다.
+[![CI](https://github.com/sgustjd2/skill-manage-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/sgustjd2/skill-manage-viewer/actions/workflows/ci.yml)
 
-- 왼쪽 **카테고리 목록**을 누르면 그 카테고리의 스킬이 오른쪽에 쭉 나옵니다. 카테고리마다 색이 다르고, 스킬마다 **한국어 한 줄 용도**와 **출처(git 커밋 / 로컬 / 플러그인 …)** 가 보입니다.
-- **링크로 설치**: GitHub 저장소·폴더·`SKILL.md` 링크 또는 `owner/repo[/경로]`를 넣으면 스킬을 찾아 골라서 설치합니다.
-- **새로 만들기 / 수정 / 삭제 / 업데이트** 를 모두 여기서 합니다.
-- **트레이 아이콘**으로 열고 닫습니다. 최소화·닫기 버튼은 창을 트레이로 숨기고, 종료는 트레이 메뉴에서 합니다. 화면 우상단 ↔ 좌하단 위치 전환, 라이트(기본)/다크 전환.
-- 글꼴은 저장소에 들어 있는 Pretendard입니다. 기울임꼴은 쓰지 않고, 모든 글씨는 배경과의 명도 대비 기준(WCAG AA)을 테스트로 확인합니다.
+내 PC에 설치된 **AI 에이전트 스킬**(Claude Code · Codex · Antigravity)을 한 화면에서 보고, 설치·업데이트·수정·삭제까지 하는 **Windows·macOS** 프로그램입니다.
+작은 창이 화면 모서리에 떠 있고, 트레이(macOS는 메뉴 막대) 아이콘으로 열고 닫습니다.
 
-## 설치
+![스킬 카탈로그 기본 화면](docs/images/main.png)
 
-### 필요한 것
+> 스크린샷은 Windows에서 예시 스킬로 찍은 것입니다. macOS도 화면 구성은 같습니다.
 
-| 항목 | Windows | macOS |
-|---|---|---|
-| OS | Windows 10 / 11 | macOS 10.15 이상 |
-| Python | 3.12 이상, [python.org](https://www.python.org/downloads/)에서 설치할 때 **Add python.exe to PATH** 체크 | 3.12 이상, **python.org 설치 프로그램**을 권장(Tk 8.6 포함). Homebrew라면 `brew install python@3.12 python-tk@3.12` |
-| Git | 링크로 설치·업데이트할 때만 필요 | 같음 (`xcode-select --install`로도 설치됨) |
+## 목차
 
-> macOS 기본 `/usr/bin/python3`의 Tk(8.5)는 창이 비어 보일 수 있으니 쓰지 마세요.
+- [이런 걸 할 수 있어요](#이런-걸-할-수-있어요)
+- [빠른 시작 (5분)](#빠른-시작-5분)
+- [자세한 설치 방법](#자세한-설치-방법)
+- [화면 구성](#화면-구성)
+- [사용 방법](#사용-방법)
+- [카테고리 기준](#카테고리-기준)
+- [스킬은 어디서 읽어 오나요](#스킬은-어디서-읽어-오나요)
+- [안전장치와 저장 위치](#안전장치와-저장-위치)
+- [문제 해결 (FAQ)](#문제-해결-faq)
+- [개발에 참여하기](#개발에-참여하기)
 
-### 설치 순서
+## 이런 걸 할 수 있어요
 
-1. 저장소를 받습니다.
-
-   ```bash
-   git clone https://github.com/sgustjd2/skill-manage-viewer.git
-   cd skill-manage-viewer
-   ```
-
-   git이 없으면 GitHub의 **Code → Download ZIP**으로 받아 압축을 풀어도 됩니다.
-
-2. 처음 한 번 실행합니다. 필요한 패키지가 없으면 먼저 설치합니다.
-
-   | | Windows | macOS |
-   |---|---|---|
-   | 더블클릭 | `start.bat` | `start.command` (처음에는 우클릭 → 열기) |
-   | 터미널 | `pip install -r requirements.txt`<br>`pythonw skill_viewer.py` | `python3 -m pip install -r requirements.txt`<br>`python3 skill_viewer.py` |
-
-3. 창이 뜨고 아이콘이 생깁니다. Windows는 작업 표시줄 오른쪽 트레이(Windows 11은 `^` 안), macOS는 화면 위쪽 **메뉴 막대**입니다.
-
-### 이름으로 검색해서 실행하기
-
-한 번만 아래를 실행하면 앞으로는 검색창에서 앱 이름으로 켤 수 있습니다.
-
-```bash
-python install.py              # Windows: python install.py
-python3 install.py             # macOS
-```
-
-| | 검색창 | 만들어지는 것 |
-|---|---|---|
-| Windows | 시작 메뉴에서 **스킬 카탈로그** 또는 **Skill Catalog** | 시작 메뉴 바로 가기 (`pythonw`로 실행, 콘솔 창 없음) |
-| macOS | Spotlight(`⌘ Space`)에서 **스킬 카탈로그** 또는 **Skill Catalog** | `~/Applications/스킬 카탈로그 (Skill Catalog).app` |
-
-- 파일을 복사하지 않고 이 폴더를 가리키므로 **저장소 폴더를 옮기거나 지우면 다시 실행**해야 합니다.
-- 로그인할 때 트레이로만 자동 시작하려면 `python install.py --startup`(Windows는 시작 프로그램 폴더, macOS는 LaunchAgent이며 다음 로그인부터 적용).
-- 되돌리기: `python install.py --uninstall` (이 스크립트가 만든 것만 지웁니다).
-- Python 경로가 바뀌면(가상환경 삭제 등) `install.py`를 다시 실행하세요.
-
-### 실행 옵션
-
-```bash
-python skill_viewer.py            # 창과 함께 시작 (Windows는 pythonw)
-python skill_viewer.py --hidden   # 트레이(메뉴 막대)로만 시작
-python skill_viewer.py --check    # 창 없이 에이전트별 스킬 개수와 폴더 위치만 출력 (설치 확인용)
-```
-
-- 최소화나 닫기(X)를 누르면 창이 숨습니다. 트레이(메뉴 막대) 아이콘을 클릭하면 다시 열립니다.
-- 완전히 끄려면 아이콘 메뉴 → **종료**.
-- 이미 실행 중이면 두 번째 실행은 아무것도 하지 않고 끝납니다.
-
-### 업데이트와 제거
-
-- 앱 업데이트: 저장소 폴더에서 `git pull` 후 다시 실행합니다.
-- 제거: 앱에서 링크로 설치한 스킬을 `⋯ → 삭제`로 정리하고, `python install.py --uninstall` 후 저장소 폴더와 `~/.skill-manager` 폴더를 지웁니다.
-  - 앱이 만든 스킬 링크는 에이전트 폴더에 남아 있으면 그대로 동작합니다. 원본(`~/.skill-manager/sources`, `skills`)을 지우면 그 링크는 끊어집니다.
-
-### 운영체제별로 다른 점
-
-- 에이전트 폴더에 만드는 링크: Windows는 junction(관리자 권한 불필요), macOS는 심볼릭 링크입니다.
-- 트레이: macOS에서는 메뉴 막대 아이콘이 **별도 프로세스**로 돕니다(앱을 닫으면 같이 종료됩니다).
-- 글꼴: 두 OS 모두 `fonts/`의 Pretendard를 이 프로그램에서만 쓰도록 불러옵니다. 실패하면 Windows는 맑은 고딕, macOS는 Apple SD Gothic Neo로 보입니다.
-- 창 위치: macOS는 메뉴 막대(약 25px)와 Dock(약 90px)을 대략 피해서 놓습니다.
-- 최소화: 두 OS 모두 작업 표시줄·Dock에 남기지 않고 트레이(메뉴 막대)로 숨깁니다.
-
-## 다른 PC에서 스킬을 찾는 위치
-
-설치한 PC에서 **자동으로 찾아서** 보여 줍니다. 따로 설정할 것은 없습니다.
-
-- Claude Code: `~/.claude/skills`와, 켜 둔 플러그인의 스킬. `CLAUDE_CONFIG_DIR`가 설정돼 있으면 그 위치를 씁니다.
-- Codex: `~/.codex/skills`. `CODEX_HOME`이 설정돼 있으면 그 위치를 씁니다.
-- Antigravity: `~/.gemini/config/skills`와 내장 스킬. (macOS도 같은 위치입니다.)
-- 설치되지 않은 에이전트는 "설치된 스킬이 없습니다"로 표시되고, 다른 에이전트에는 영향이 없습니다. 깨진 설정 파일이나 형식이 이상한 `SKILL.md`가 있어도 그 항목만 건너뜁니다.
-- 한국어 용도 설명은 `skill_notes.json`에 있는 스킬만 한국어이고, 나머지는 스킬 원문 설명의 첫 문장을 보여 줍니다. 앱에서 `⋯ → 용도 설명 수정`으로 바꿀 수 있습니다.
-
-## 기능
-
-| 하는 일 | 방법 |
+| 기능 | 설명 |
 |---|---|
-| 카테고리별 보기 | 왼쪽 목록에서 카테고리 클릭 (마우스를 올리면 아래쪽에 그 카테고리의 기준이 나옵니다) |
-| 링크로 설치 | 헤더 `＋ 추가` → 링크로 설치 → 링크 입력 → 불러오기 → 스킬·에이전트 선택 → 설치 |
-| 새 스킬 만들기 | `＋ 추가` → 새로 만들기 (SKILL.md 템플릿을 만들고 편집기를 엽니다) |
-| 업데이트 | 헤더 `⇧ 업데이트` 또는 스킬 `⋯` → 저장소 업데이트 확인 (새 커밋이 있으면 `git pull --ff-only`) |
-| 수정 | `⋯` → SKILL.md 열어서 수정 / 용도 설명 수정 |
-| 삭제 | `⋯` → 삭제 |
-| 이름 복사 | 스킬을 클릭 |
-| 화면 전환 | 헤더 `다크`/`라이트`, `⇄`(우상단 ↔ 좌하단) |
+| 한눈에 보기 | 세 에이전트의 스킬을 탭으로 나눠 보여 주고, 왼쪽 **카테고리 목록**에서 고르면 그 카테고리 스킬만 나옵니다. |
+| 무엇에 쓰는지 | 스킬마다 **한국어 한 줄 용도**를 붙였습니다. 직접 고칠 수도 있습니다. |
+| 어디서 왔는지 | 스킬 오른쪽에 **출처**(git 커밋, 로컬, 플러그인 …)가 보여서 관리할 수 있는 스킬인지 바로 압니다. |
+| 링크로 설치 | GitHub 링크나 `owner/repo`를 넣으면 그 안의 스킬을 찾아 보여 주고, 고른 것만 설치합니다. |
+| 업데이트 | git으로 받은 스킬에 새 버전이 있는지 확인하고 한 번에 받습니다. |
+| 새로 만들기·수정·삭제 | 스킬 템플릿을 만들어 편집기로 열고, 수정·삭제도 여기서 합니다. 삭제한 폴더는 휴지통 폴더로 옮겨져 되살릴 수 있습니다. |
+| 보기 편하게 | 밝은/어두운 화면, 우상단·좌하단 위치 전환, 카테고리별 색, Pretendard 글꼴, 모든 글씨의 대비 기준(WCAG AA) 충족. |
 
-지원하는 링크 형식:
+## 빠른 시작 (5분)
 
-```
-mattpocock/skills                                     저장소 전체에서 스킬 찾기
-mattpocock/skills/skills/engineering/tdd              저장소 안의 경로
-https://github.com/mattpocock/skills                  저장소 링크
-https://github.com/o/r/tree/main/skills/foo           브랜치·폴더 링크
-https://github.com/o/r/blob/main/skills/foo/SKILL.md  파일 링크 (그 폴더를 설치)
-```
+이미 Python 3.12 이상과 Git이 있다면 이것만 하면 됩니다. 없다면 [자세한 설치 방법](#자세한-설치-방법)부터 보세요.
 
-https 링크만 받습니다(`file:`, `ext::`, ssh, 계정 정보가 들어간 링크는 거부). 브랜치 이름에 `/`가 있으면 저장소 루트 링크를 쓰세요.
-
-## 카테고리
-
-스킬은 **"언제 쓰는가"** 하나의 기준으로 나누고, 한 스킬은 정확히 한 카테고리에만 들어갑니다. 아는 스킬은 모두 `skill_categories.json`에 이름으로 적혀 있고, 같은 이름이 두 카테고리에 있으면 테스트가 실패합니다.
-
-| 카테고리 | 기준 |
-|---|---|
-| 기획·설계 | 코드를 쓰기 전에 요구사항·계획·구조를 정할 때 |
-| 구현·테스트 | 정한 계획을 코드와 테스트로 옮길 때 |
-| 디버깅·검증 | 문제의 원인을 찾거나, 끝내기 전에 실제로 동작하는지 확인할 때 |
-| 리뷰·품질 | 완성된 변경을 다른 눈으로 점검하고 품질 부채를 관리할 때 |
-| Git·협업 | 커밋·PR·브랜치와 저장소 규칙으로 변경을 공유할 때 |
-| UI·디자인 | 화면·브랜드·이미지 같은 시각물을 만들거나 고치거나 점검할 때 |
-| 문서·자료 | 문서·발표·표 파일을 만들거나, 자료를 조사해 정리할 때 |
-| 자동화·브라우저 | 브라우저·PC를 대신 조작하거나 예약·반복 작업을 돌릴 때 |
-| 에이전트·스킬 설정 | 에이전트 자체(스킬·플러그인·설정·메모리)를 만들거나 관리할 때 |
-| 기타 | 위 어디에도 맞지 않는 스킬 |
-
-목록에 없는 새 스킬은 각 카테고리의 `keywords`를 위 순서대로 이름 → 설명 순으로 맞춰 보고 처음 맞는 곳에 넣습니다.
-
-## 동작 방식
-
-```
-~/.skill-manager/sources/<저장소>/   링크로 받은 git 클론 (얕은 클론)
-~/.skill-manager/skills/<이름>/      여기서 새로 만든 스킬
-~/.skill-manager/trash/              삭제·교체된 것이 이동하는 곳 (영구 삭제 없음)
-~/.skill-manager/notes.json          직접 고친 용도 설명
-~/.skill-manager/settings.json       라이트/다크 선택
-```
-
-각 에이전트 폴더(`~/.claude/skills`, `~/.codex/skills`, `~/.gemini/config/skills`)에는 위 실제 폴더를 가리키는
-**junction(폴더 링크)** 이 만들어집니다. 그래서 복사본이 없고, 업데이트는 한 번 `git pull` 하면 세 에이전트에 동시에 반영됩니다.
-
-- **삭제**: 링크는 링크만 해제(원본 유지), 직접 만든 실제 폴더는 `trash/`로 이동합니다. 에이전트마다 따로 삭제됩니다.
-- **같은 이름이 이미 있을 때**: 기본은 건너뜁니다. "교체"를 켜면 기존 것을 `trash/`에 백업한 뒤 교체합니다.
-- **업데이트로 폴더가 옮겨졌을 때**: 끊어진 링크를 같은 이름의 새 위치로 다시 연결하고, 저장소에서 사라진 스킬은 알려 줍니다.
-- 플러그인·내장·앱 동기화 스킬은 보기만 가능합니다(관리는 해당 플러그인/앱에서).
-- 이전에 만든 `~/.mattpocock-skills-update.ps1`(로그인 시 자동 업데이트)이 있으면, 삭제한 스킬이 다시 연결되지 않도록 그 목록에서도 이름을 뺍니다.
-
-> ⚠ 스킬은 에이전트가 그대로 따르는 지시문이고 스크립트를 포함할 수 있습니다. 신뢰할 수 있는 출처만 설치하세요.
-
-## 개발 환경
-
-### 준비
-
-Windows 또는 macOS에서 Python 3.12 이상과 git이 필요합니다. macOS 쪽 코드는 GitHub Actions의 macOS 실행기에서 같은 테스트로 확인합니다(`.github/workflows/ci.yml`).
+**Windows** (명령 프롬프트 또는 PowerShell)
 
 ```bash
 git clone https://github.com/sgustjd2/skill-manage-viewer.git
 cd skill-manage-viewer
-py -3.12 -m venv .venv           # macOS: python3.12 -m venv .venv
-.venv\Scripts\activate           # macOS: source .venv/bin/activate
-pip install -r requirements.txt ruff pyright
+.\start.bat
+python install.py
 ```
 
-`pyright`는 처음 실행할 때 Node.js를 쓰거나 내려받습니다.
-
-### 확인 명령
+**macOS** (터미널)
 
 ```bash
-python -m unittest test_manager test_viewer test_install -v     # 테스트 (임시 폴더에서만 동작, 실제 ~/.claude 등은 쓰지 않음)
-python -m ruff check . --line-length 140 --select E,F,W,B,UP,SIM  # 린트
-python -m ruff format --line-length 140 test_viewer.py test_manager.py
-python -m pyright skill_manager.py skill_viewer.py              # 타입 검사
-python skill_viewer.py --check                                  # 이 PC의 스킬 탐색 결과
+git clone https://github.com/sgustjd2/skill-manage-viewer.git
+cd skill-manage-viewer
+./start.command
+python3 install.py
 ```
 
-GUI 테스트는 실제로 창을 띄웠다 닫으므로 화면이 잠깐 깜빡입니다. 테스트가 확인하는 것:
+1. `start.bat` / `start.command`: 필요한 패키지가 없으면 설치하고 앱을 띄웁니다.
+2. `install.py`: 앞으로 **시작 메뉴(Windows) / Spotlight(macOS)** 에서 `스킬 카탈로그` 또는 `Skill Catalog`로 검색해 켤 수 있게 등록합니다.
 
-- `test_manager`: 링크 해석(허용·거부), 설치·업데이트·재연결·삭제, 이름 충돌과 교체, 휴지통 이동, 새 스킬 생성
-- `test_install`: macOS `.app` 구성(Info.plist·launcher·아이콘·로그인 항목)과 제거 범위, Windows 시작 메뉴 바로 가기(다른 OS에서는 건너뜀)
-- `test_viewer`: 트레이·최소화·위치 전환, 카테고리 목록과 검색, 메뉴, 추가 대화상자, 업데이트, 테마, 글꼴(Pretendard·기울임 없음),
-  **모든 글씨의 명도 대비(라이트·다크, 마우스 올림·선택·비활성 상태 포함)**, 카테고리 중복 없음, 다른 PC 환경(환경변수, 없는 폴더, 깨진 파일),
-  OS 공통 동작(폴더 링크, 중복 실행 방지, 우클릭 이벤트, 트레이 명령 허용 목록)
+## 자세한 설치 방법
 
-### 파일 구성
+### 1. 필요한 것
 
-| 파일 | 내용 |
+| 항목 | Windows | macOS |
+|---|---|---|
+| 운영체제 | Windows 10 / 11 | macOS 10.15 (Catalina) 이상 |
+| Python | 3.12 이상 | 3.12 이상 (Tk 8.6 포함 버전) |
+| Git | 링크로 설치·업데이트할 때 필요 | 같음 |
+
+### 2. Python 설치
+
+**Windows**
+
+- [python.org 다운로드](https://www.python.org/downloads/)에서 Python 3.12 이상을 받아 실행합니다.
+- 첫 화면 아래의 **Add python.exe to PATH**를 꼭 체크하고 **Install Now**를 누릅니다.
+- 또는 터미널에서 `winget install Python.Python.3.12`
+- 확인: 새 터미널에서 `python --version` → `Python 3.12.x` 이상이면 됩니다.
+
+**macOS**
+
+- 권장: [python.org](https://www.python.org/downloads/macos/)의 macOS 설치 프로그램(Tk 8.6이 함께 들어 있습니다).
+- Homebrew를 쓴다면: `brew install python@3.12 python-tk@3.12`
+- 확인: `python3 --version`, 그리고 `python3 -c "import tkinter; print(tkinter.TkVersion)"`이 `8.6`이면 됩니다.
+
+> ⚠ macOS에 기본으로 있는 `/usr/bin/python3`는 Tk 8.5라 창이 비어 보일 수 있습니다. 위 방법으로 설치한 Python을 쓰세요.
+
+### 3. Git 설치 (링크 설치·업데이트를 쓸 때)
+
+- Windows: [git-scm.com](https://git-scm.com/download/win) 또는 `winget install Git.Git`
+- macOS: `xcode-select --install` 또는 `brew install git`
+- 확인: `git --version`
+
+### 4. 프로그램 받기
+
+```bash
+git clone https://github.com/sgustjd2/skill-manage-viewer.git
+```
+
+Git이 없다면 GitHub 페이지의 **Code → Download ZIP**으로 받아 압축을 풀어도 됩니다. 받은 폴더는 지우거나 옮기지 마세요. 프로그램이 그 폴더에서 실행됩니다.
+
+### 5. 처음 실행
+
+| | Windows | macOS |
+|---|---|---|
+| 더블클릭 | `start.bat` | `start.command` (처음 한 번은 **우클릭 → 열기**, "확인되지 않은 개발자" 경고 때문) |
+| 터미널 | `pip install -r requirements.txt` 후 `pythonw skill_viewer.py` | `python3 -m pip install -r requirements.txt` 후 `python3 skill_viewer.py` |
+
+- 설치되는 패키지: `pystray`(트레이 아이콘), `pillow`(아이콘 그림), macOS만 `pyobjc-framework-Quartz`(메뉴 막대).
+- 창이 뜨기까지 **4~8초** 걸립니다. 스킬 폴더를 모두 읽기 때문입니다.
+- 화면 오른쪽 위에 창이 뜨고, 아이콘이 생깁니다. Windows는 작업 표시줄 오른쪽 트레이(Windows 11은 `^`를 눌러야 보일 수 있음), macOS는 화면 맨 위 메뉴 막대입니다.
+
+### 6. 검색해서 켤 수 있게 등록 (권장)
+
+```bash
+python install.py          # macOS는 python3 install.py
+```
+
+| | 검색하는 곳 | 검색어 | 만들어지는 것 |
+|---|---|---|---|
+| Windows | 시작 메뉴 | `스킬 카탈로그` 또는 `Skill Catalog` | 시작 메뉴 바로 가기 |
+| macOS | Spotlight (`⌘ + Space`) | `스킬 카탈로그` 또는 `Skill Catalog` | `~/Applications/스킬 카탈로그 (Skill Catalog).app` |
+
+추가 옵션:
+
+```bash
+python install.py --startup     # 로그인할 때 트레이로만 자동 시작 (macOS는 다음 로그인부터)
+python install.py --uninstall   # 위에서 만든 것 지우기 (이 스크립트가 만든 것만 지웁니다)
+```
+
+> 프로그램 폴더를 옮기거나, Python을 다시 설치해 경로가 바뀌면 `install.py`를 다시 실행하세요.
+
+### 7. 업데이트와 제거
+
+- **프로그램 업데이트**: 프로그램 폴더에서 `git pull` 후 다시 실행합니다.
+- **완전히 제거**
+  1. 앱에서 링크로 설치한 스킬을 `⋯ → 삭제`로 정리합니다(원하면).
+  2. `python install.py --uninstall`
+  3. 프로그램 폴더와 `~/.skill-manager` 폴더를 지웁니다.
+
+## 화면 구성
+
+![카테고리를 고른 화면](docs/images/category.png)
+
+| 영역 | 설명 |
 |---|---|
-| `skill_manager.py` | 설치·업데이트·삭제·생성 로직 (Tk 없음) |
-| `skill_viewer.py` | 창, 트레이, 추가 대화상자, 색·글꼴 |
-| `platform_support.py` | Windows/macOS에서 달라지는 것(폴더 링크, 파일 열기, 글꼴 로드, 화면 영역, 중복 실행 방지)을 한곳에 모음 |
-| `install.py` | 시작 메뉴 바로 가기 / macOS `.app` 만들기와 제거 |
-| `start.bat`, `start.command` | 패키지 확인 후 실행 (Windows / macOS) |
-| `.github/workflows/ci.yml` | Windows·macOS에서 린트와 테스트 실행 |
-| `skill_categories.json` | 카테고리 기준(`about`), 소속 스킬(`skills`), 새 스킬 분류용 `keywords` |
-| `skill_notes.json` | 스킬별 한국어 용도 (이름 → 한 줄) |
-| `fonts/` | Pretendard Regular·Bold (SIL OFL 1.1, `fonts/LICENSE.txt`) |
+| **위쪽 버튼** | `＋ 추가` 스킬 설치·만들기 · `⇧ 업데이트` git 스킬 새 버전 확인 · `⟳` 새로고침 · `다크`/`라이트` 화면 밝기 · `⇄` 우상단↔좌하단 · `–` 트레이로 숨기기 |
+| **에이전트 탭** | Claude Code / Codex / Antigravity. 옆의 숫자는 그 에이전트의 스킬 수 |
+| **카테고리 목록 (왼쪽)** | 누르면 그 카테고리만 오른쪽에 나옵니다. 마우스를 올리면 아래쪽 상태줄에 그 카테고리의 기준이 나옵니다. `전체`는 모든 스킬을 카테고리별로 묶어 보여 줍니다. |
+| **검색** | 이름, 한국어 용도, 원문 설명, 출처에서 찾습니다. 검색 중에는 카테고리 숫자도 검색 결과 기준으로 바뀝니다. |
+| **구간 제목** | 카테고리 이름, 기준 문장, 개수. 카테고리마다 색이 다릅니다. |
+| **스킬 줄** | 이름 · 배지 · 출처 · `⋯` 메뉴, 아래에 한국어 용도 |
+| **상태줄 (맨 아래)** | 사용법 안내, 복사·삭제 같은 작업 결과 |
 
-### 스킬을 새로 분류하거나 설명을 붙일 때
+스킬 줄의 **배지**
 
-1. `skill_categories.json`에서 맞는 카테고리의 `skills`에 이름을 추가합니다(한 곳에만).
-2. `skill_notes.json`에 `"이름": "한 줄 용도"`를 추가합니다.
-3. `python -m unittest test_viewer`로 중복·누락이 없는지 확인합니다. 설명이 있는데 카테고리가 없으면 테스트가 알려 줍니다.
+| 배지 | 뜻 |
+|---|---|
+| `수동` | 에이전트가 알아서 쓰지 않고, 사용자가 `/이름`으로 직접 불러야 하는 스킬 |
+| `업데이트 있음` | `⇧ 업데이트`로 확인했을 때 원본 저장소에 새 버전이 있는 스킬 |
 
-색을 바꿀 때는 `skill_viewer.py`의 `CAT_COLORS`·`LIGHT`·`DARK`를 고치고 같은 테스트로 대비를 확인합니다.
+스킬 줄의 **출처**와 여기서 관리할 수 있는지
+
+| 출처 | 뜻 | 수정·삭제 |
+|---|---|---|
+| `git · 49dd158` | git 저장소를 가리키는 스킬(링크로 설치한 것). 숫자는 현재 커밋 | ✅ (업데이트도 가능) |
+| `로컬` | 에이전트 폴더에 직접 들어 있는 폴더 | ✅ |
+| `내 스킬` | 이 프로그램의 `새로 만들기`로 만든 스킬 | ✅ |
+| `링크` | git이 아닌 다른 폴더를 가리키는 링크 | ✅ |
+| `플러그인 v1.2.3` | Claude Code 플러그인이 넣은 스킬 | 보기만 (플러그인에서 관리) |
+| `내장` | Antigravity에 기본으로 들어 있는 스킬 | 보기만 |
+| `시스템` | Codex 시스템 스킬(`.system`) | 보기만 |
+| `앱 동기화` | 데스크톱 앱이 동기화해 넣은 스킬 | 보기만 |
+
+어두운 화면(`다크` 버튼):
+
+![어두운 화면](docs/images/dark.png)
+
+## 사용 방법
+
+### 스킬 이름 복사
+
+스킬 줄을 **클릭**하면 이름이 복사됩니다. 에이전트 대화창에 `/` 뒤에 붙여 넣어 쓰면 됩니다.
+
+### 찾기
+
+위쪽 검색창에 입력합니다. 예: `검증`, `pdf`, `git ·`(git으로 받은 스킬만)
+
+![검색 결과](docs/images/search.png)
+
+### 링크로 설치
+
+1. `＋ 추가` → **링크로 설치** 탭
+2. 링크를 넣고 **불러오기** (처음 받는 저장소는 몇 초 걸립니다)
+3. 찾은 스킬 중 설치할 것을 체크합니다. 여러 개면 `전체 선택`/`전체 해제`를 쓸 수 있습니다.
+4. 아래에서 **설치할 에이전트**를 고르고 **선택한 스킬 설치**
+
+![링크로 설치](docs/images/add-link.png)
+
+넣을 수 있는 링크:
+
+```
+mattpocock/skills                                     저장소 전체에서 스킬 찾기 (GitHub)
+mattpocock/skills/skills/engineering/tdd              저장소 안의 특정 폴더
+https://github.com/mattpocock/skills                  저장소 링크
+https://github.com/o/r/tree/main/skills/foo           브랜치·폴더 링크
+https://github.com/o/r/blob/main/skills/foo/SKILL.md  SKILL.md 파일 링크 (그 폴더를 설치)
+https://gitlab.example.com/group/repo/-/tree/dev/x    GitLab 링크도 같은 방식
+```
+
+- **https 링크만** 받습니다. `file:`, ssh, 계정 정보가 들어간 링크는 거부합니다.
+- 같은 이름의 스킬이 이미 있으면 기본은 **건너뜁니다**. `같은 이름이 있으면 교체`를 켜면 기존 것을 휴지통 폴더에 백업한 뒤 바꿉니다.
+- 브랜치 이름에 `/`가 들어 있으면(`feature/x`) 저장소 링크로 넣어 주세요.
+- 비공개 저장소는 이 PC의 git에 로그인돼 있어야 받을 수 있습니다.
+
+> ⚠ 스킬은 에이전트가 그대로 따르는 지시문이고 스크립트를 포함할 수 있습니다. **믿을 수 있는 출처만** 설치하세요.
+
+### 새 스킬 만들기
+
+1. `＋ 추가` → **새로 만들기** 탭
+2. 이름(영문·숫자·`-_.`, 예: `release-notes`)과 한 줄 설명을 적습니다. 설명은 에이전트가 이 스킬을 **언제 쓸지 판단하는 문장**이니 구체적으로 쓰세요.
+3. 에이전트를 고르고 **만들고 편집기 열기** → 열린 `SKILL.md`에 할 일과 단계를 적어 저장합니다.
+
+![새로 만들기](docs/images/add-new.png)
+
+### 수정
+
+스킬 줄의 `⋯`를 누르거나 우클릭(macOS는 우클릭 또는 `Control + 클릭`)합니다.
+
+- **용도 설명 수정…**: 화면에 보이는 한국어 한 줄만 바꿉니다(스킬 파일은 그대로). 비우면 원래 설명으로 돌아갑니다.
+- **SKILL.md 열어서 수정**: 스킬 파일을 편집기로 엽니다. `git ·` 출처 스킬은 원본 저장소 파일이 바뀐다는 확인 창이 먼저 뜹니다(다음 업데이트 때 충돌할 수 있음).
+
+### 업데이트
+
+- 위쪽 `⇧ 업데이트`: git으로 받은 모든 스킬의 저장소를 확인합니다.
+- 스킬 `⋯ → 이 스킬의 저장소 업데이트 확인`: 그 스킬의 저장소만 확인합니다.
+- 새 버전이 있으면 목록을 보여 주고, **예**를 누르면 받습니다. 받은 뒤 바뀐 커밋(`aaa → bbb`)을 알려 줍니다.
+- 저장소 안에서 스킬 폴더 위치가 바뀌었으면 자동으로 다시 연결하고, 저장소에서 사라진 스킬은 알려 줍니다.
+
+### 삭제
+
+`⋯ → 삭제…`. **지금 보고 있는 에이전트에서만** 지워집니다.
+
+- 링크(`git ·`, `내 스킬`, `링크`)는 **연결만 끊고** 원본은 그대로 둡니다.
+- 실제 폴더(`로컬`)는 영구 삭제하지 않고 `~/.skill-manager/trash/`로 옮깁니다. 되살리려면 그 폴더를 원래 자리로 옮기면 됩니다.
+
+### 창 다루기
+
+| 하고 싶은 것 | 방법 |
+|---|---|
+| 창 숨기기 | `–` 버튼, 창의 최소화, 닫기(X) 모두 트레이로 숨깁니다 |
+| 다시 열기 | 트레이(메뉴 막대) 아이콘 클릭, 또는 아이콘 메뉴 → 열기 / 닫기 |
+| 위치 바꾸기 | `⇄` (우상단 ↔ 좌하단) |
+| 밝기 바꾸기 | `다크` / `라이트` (다음 실행에도 유지) |
+| 완전히 끄기 | 트레이 아이콘 메뉴 → **종료** |
+
+트레이 아이콘 메뉴: 열기 / 닫기 · 스킬 추가… · 업데이트 확인 · 위치 전환 · 새로고침 · 종료.
+창이 열려 있으면 1분마다 목록을 다시 읽습니다(검색 중에는 제외).
+
+## 카테고리 기준
+
+스킬은 **"언제 쓰는가"** 하나의 기준으로 나누고, **한 스킬은 정확히 한 카테고리**에만 들어갑니다.
+
+![카테고리별 색 구분 (Codex 탭)](docs/images/codex.png)
+
+| 카테고리 | 이럴 때 쓰는 스킬 | 예 |
+|---|---|---|
+| 기획·설계 | 코드를 쓰기 전에 요구사항·계획·구조를 정할 때 | `grilling`, `brainstorming`, `writing-plans` |
+| 구현·테스트 | 정한 계획을 코드와 테스트로 옮길 때 | `tdd`, `executing-plans` |
+| 디버깅·검증 | 문제의 원인을 찾거나, 끝내기 전에 실제로 동작하는지 확인할 때 | `systematic-debugging`, `verification-before-completion` |
+| 리뷰·품질 | 완성된 변경을 다른 눈으로 점검하고 품질 부채를 관리할 때 | `requesting-code-review`, `review-agent` |
+| Git·협업 | 커밋·PR·브랜치와 저장소 규칙으로 변경을 공유할 때 | `using-git-worktrees`, `finishing-a-development-branch` |
+| UI·디자인 | 화면·브랜드·이미지 같은 시각물을 만들거나 고치거나 점검할 때 | `ui-polish`, `impeccable`, `canvas-design` |
+| 문서·자료 | 문서·발표·표 파일을 만들거나, 자료를 조사해 정리할 때 | `docx`, `pdf`, `deep-research` |
+| 자동화·브라우저 | 브라우저·PC를 대신 조작하거나 예약·반복 작업을 돌릴 때 | `built-in-browser`, `computer-use` |
+| 에이전트·스킬 설정 | 에이전트 자체(스킬·플러그인·설정·메모리)를 만들거나 관리할 때 | `skill-creator`, `plugin` |
+| 기타 | 위 어디에도 맞지 않는 스킬 | |
+
+처음 보는 스킬은 이름과 설명의 단어로 자동 분류합니다. 분류를 바꾸고 싶으면 [개발 가이드](docs/DEVELOPMENT.md#스킬을-분류하거나-한국어-설명을-붙일-때)를 보세요.
+
+## 스킬은 어디서 읽어 오나요
+
+설치한 PC에서 **자동으로** 찾습니다. 따로 설정할 것은 없습니다. (`~`는 사용자 홈 폴더: Windows는 `C:\Users\이름`, macOS는 `/Users/이름`)
+
+| 에이전트 | 읽는 곳 |
+|---|---|
+| Claude Code | `~/.claude/skills`, 켜 둔 플러그인의 스킬. 환경변수 `CLAUDE_CONFIG_DIR`가 있으면 그 폴더 |
+| Codex | `~/.codex/skills` (시스템 스킬 `.system` 포함). 환경변수 `CODEX_HOME`이 있으면 그 폴더 |
+| Antigravity | `~/.gemini/config/skills`, Antigravity 내장 스킬 |
+
+- 설치되지 않은 에이전트는 "설치된 스킬이 없습니다"로만 표시되고 다른 탭에는 영향이 없습니다.
+- 내용이 이상한 `SKILL.md`나 깨진 설정 파일이 있어도 그 항목만 건너뜁니다.
+- 지금 PC에서 무엇을 찾는지 확인: `python skill_viewer.py --check`
+
+## 안전장치와 저장 위치
+
+| 경로 | 내용 |
+|---|---|
+| `~/.skill-manager/sources/` | 링크로 받은 git 저장소 (얕은 복제) |
+| `~/.skill-manager/skills/` | `새로 만들기`로 만든 스킬 |
+| `~/.skill-manager/trash/` | 삭제·교체된 폴더 (영구 삭제하지 않음) |
+| `~/.skill-manager/notes.json` | 직접 고친 한국어 용도 |
+| `~/.skill-manager/settings.json` | 밝은/어두운 화면 선택 |
+
+- 각 에이전트 폴더에는 위 실제 폴더를 가리키는 **링크**(Windows는 junction, macOS는 심볼릭 링크)만 만듭니다. 복사본이 없으므로 `git pull` 한 번이면 세 에이전트에 함께 반영됩니다.
+- 이 프로그램은 어떤 것도 **영구 삭제하지 않습니다**. 링크는 끊기만 하고, 실제 폴더는 `trash/`로 옮깁니다.
+- 링크 설치는 https만 받고, git이 다른 프로토콜(`file:`, `ext::` 등)을 쓰지 못하게 막은 상태로 받습니다.
+- 글꼴(Pretendard)은 이 프로그램 안에서만 불러오고 PC에 설치하지 않습니다.
+
+## 문제 해결 (FAQ)
+
+**트레이 아이콘이 안 보여요.**
+Windows 11은 작업 표시줄 오른쪽 `^`를 눌러 숨은 아이콘을 보세요. 끌어서 작업 표시줄로 꺼내 둘 수 있습니다. macOS는 화면 맨 위 메뉴 막대 오른쪽입니다.
+
+**실행했는데 창이 안 떠요.**
+- 4~8초 기다려 보세요. 처음에 스킬 폴더를 모두 읽습니다.
+- 이미 실행 중이면 두 번째 실행은 조용히 끝납니다. 트레이 아이콘을 눌러 보세요.
+- 오류를 보려면 콘솔에서 `python skill_viewer.py`로 실행하면 메시지가 나옵니다(`pythonw`는 콘솔이 없음).
+
+**macOS에서 창이 비어 있거나 깨져 보여요.**
+`/usr/bin/python3`(Tk 8.5)로 실행한 경우입니다. python.org 설치본이나 Homebrew `python-tk`로 실행하세요.
+
+**macOS에서 `start.command`가 안 열려요.**
+처음 한 번은 Finder에서 **우클릭 → 열기**를 누르세요. 그래도 안 되면 터미널에서 `chmod +x start.command`.
+
+**스킬이 목록에 없어요.**
+`python skill_viewer.py --check`로 어떤 폴더를 읽는지 확인하세요. 에이전트 설정 위치를 바꿨다면 `CLAUDE_CONFIG_DIR`, `CODEX_HOME` 환경변수가 그 위치를 가리켜야 합니다.
+
+**링크로 설치가 안 돼요.**
+- `git --version`으로 Git이 설치돼 있는지 확인하세요.
+- 비공개 저장소는 이 PC의 git이 그 저장소에 접근할 수 있어야 합니다.
+- 상태줄과 대화상자에 나온 오류 문구를 그대로 확인하세요(예: `Repository not found`).
+
+**업데이트가 실패해요.**
+그 스킬의 `SKILL.md`를 직접 고쳤다면 원본과 충돌한 것입니다. `~/.skill-manager/sources/<저장소>`에서 고친 내용을 정리한 뒤 다시 시도하세요.
+
+**글꼴이 Pretendard가 아니에요.**
+`fonts/` 폴더에 `Pretendard-Regular.otf`, `Pretendard-Bold.otf`가 있는지 확인하세요. 불러오지 못하면 Windows는 맑은 고딕, macOS는 Apple SD Gothic Neo로 보입니다.
+
+## 개발에 참여하기
+
+개발 환경 준비, 구조, 테스트, 코드 규칙은 **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** 에 정리돼 있습니다.
+
+## 라이선스
+
+- 글꼴 [Pretendard](https://github.com/orioncactus/pretendard): SIL Open Font License 1.1 (`fonts/LICENSE.txt`)
