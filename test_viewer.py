@@ -114,17 +114,21 @@ class PanelTest(unittest.TestCase):
         return len(self.app.shown)
 
     # ---- window, tray, list ---------------------------------------------------------------
-    def test_01_tray_corner_and_toggle(self):
+    def test_01_centered_and_tray_toggle(self):
         app = self.app
         if plat.WIN:
             self.assertTrue(app.tray is not None and app.tray.HAS_MENU)
         left, top, right, bottom = plat.work_area(app.root)
+        app.place()
+        app.root.update()
         x, y, x2, y2 = self.shot(app.root, "t1_default")
-        self.assertTrue(app.visible and x2 <= right and y >= top)
-        app.move()
-        box = self.shot(app.root, "t1_bottomleft")
-        self.assertTrue(box[0] < 40 and box[3] >= bottom - 40, box)
-        app.move()
+        self.assertTrue(app.visible and left <= x and x2 <= right and top <= y and y2 <= bottom)
+        # the window sits in the middle of the usable screen (within a few pixels, title bar and borders included)
+        self.assertAlmostEqual((x + x2) / 2, (left + right) / 2, delta=app.px(24))
+        self.assertAlmostEqual((y + y2) / 2, (top + bottom) / 2, delta=app.px(40))
+        moved = app.root.winfo_x() + 37  # the user drags it somewhere: hiding and showing must not snap it back
+        app.root.geometry(f"+{moved}+{app.root.winfo_y()}")
+        app.root.update()
         app._last_toggle = 0.0  # tests toggle faster than a double-click
         app.events.put("toggle")
         app._pump()
@@ -133,6 +137,23 @@ class PanelTest(unittest.TestCase):
         app.events.put("toggle")
         app._pump()
         self.assertTrue(app.visible and app.root.state() == "normal")
+        self.assertEqual(app.root.winfo_x(), moved)
+
+    def test_01d_dialogs_open_centered_over_the_panel_and_stay_on_screen(self):
+        app = self.app
+        app.place()
+        app.root.update()
+        app.add_dialog()
+        win = app.dialog.win
+        win.update()
+        left, top, right, bottom = plat.work_area(app.root)
+        self.assertTrue(left <= win.winfo_x() and win.winfo_x() + win.winfo_width() <= right)
+        self.assertTrue(top <= win.winfo_y() and win.winfo_y() + win.winfo_height() <= bottom)
+        centre = lambda w: (w.winfo_x() + w.winfo_width() / 2, w.winfo_y() + w.winfo_height() / 2)  # noqa: E731
+        (dx, dy), (rx, ry) = centre(win), centre(app.root)
+        self.assertLessEqual(abs(dx - rx), app.px(60))  # horizontally centered over the panel
+        self.assertLessEqual(abs(dy - ry), app.px(80))
+        app.dialog.close()
 
     def test_01b_window_has_minimize_and_close_but_no_toolwindow_style(self):
         app = self.app
