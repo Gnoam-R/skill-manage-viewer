@@ -1,0 +1,66 @@
+[
+  {
+    "name": "기획·설계",
+    "about": "코드를 쓰기 전에 요구사항·계획·구조를 정할 때",
+    "keywords": "grill|brainstorm|plan|\\bspec\\b|interview|architecture|domain-model|codebase-design",
+    "skills": ["brainstorming", "grill-me", "grill-with-docs", "grilling", "writing-plans", "domain-modeling",
+               "codebase-design", "improve-codebase-architecture"]
+  },
+  {
+    "name": "구현·테스트",
+    "about": "정한 계획을 코드와 테스트로 옮길 때",
+    "keywords": "tdd|test|implement|execut|subagent|parallel",
+    "skills": ["tdd", "test-driven-development", "executing-plans", "subagent-driven-development",
+               "dispatching-parallel-agents", "ponytail"]
+  },
+  {
+    "name": "디버깅·검증",
+    "about": "문제의 원인을 찾거나, 끝내기 전에 실제로 동작하는지 확인할 때",
+    "keywords": "debug|diagnos|verif|reverse-engineer|troubleshoot",
+    "skills": ["systematic-debugging", "diagnosing-superpowers", "verification-before-completion",
+               "reverse-engineer-anything"]
+  },
+  {
+    "name": "리뷰·품질",
+    "about": "완성된 변경을 다른 눈으로 점검하고 품질 부채를 관리할 때",
+    "keywords": "review|audit|security|simplify|lint|debt",
+    "skills": ["review-agent", "requesting-code-review", "receiving-code-review", "ponytail-review",
+               "ponytail-audit", "ponytail-debt", "ponytail-gain"]
+  },
+  {
+    "name": "Git·협업",
+    "about": "커밋·PR·브랜치와 저장소 규칙으로 변경을 공유할 때",
+    "keywords": "gitlab|github|commit|\\bpr\\b|\\bgit\\b|worktree|branch|merge",
+    "skills": ["company-commit-pr", "gitlab-guide-check", "finishing-a-development-branch", "using-git-worktrees",
+               "permissioned-github"]
+  },
+  {
+    "name": "UI·디자인",
+    "about": "화면·브랜드·이미지 같은 시각물을 만들거나 고치거나 점검할 때",
+    "keywords": "design|\\bui\\b|ux|brand|banner|theme|frontend|figma|canvas|styling|polish|image|visual|css",
+    "skills": ["banner-design", "brand", "brand-guidelines", "canvas-design", "design", "design-system",
+               "design-taste-frontend", "frontend-design", "generative_ui", "impeccable", "theme-factory", "ui-audit",
+               "ui-design", "ui-polish", "ui-qa", "ui-styling", "ui-ux-pro-max", "ui-work", "web-artifacts-builder",
+               "web-design-guidelines", "imagegen"]
+  },
+  {
+    "name": "문서·자료",
+    "about": "문서·발표·표 파일을 만들거나, 자료를 조사해 정리할 때",
+    "keywords": "docx|pdf|pptx|xlsx|\\bdocs?\\b|slide|sheet|spreadsheet|report|research|brief",
+    "skills": ["docs", "docx", "pdf", "pptx", "xlsx", "google-workspace", "slides", "deep-research", "morning"]
+  },
+  {
+    "name": "자동화·브라우저",
+    "about": "브라우저·PC를 대신 조작하거나 예약·반복 작업을 돌릴 때",
+    "keywords": "browser|chrome|computer-use|playwright|schedul|cron|automation|workflow|\\bloop\\b",
+    "skills": ["built-in-browser", "chrome-browser", "computer-use", "automation", "run-workflow"]
+  },
+  {
+    "name": "에이전트·스킬 설정",
+    "about": "에이전트 자체(스킬·플러그인·설정·메모리)를 만들거나 관리할 때",
+    "keywords": "skill|plugin|config|setup|settings|keybind|customiz|memory|mcp|agent|claude|codex|antigravity",
+    "skills": ["skill-creator", "skill-installer", "writing-skills", "using-superpowers", "plugin", "agy-customizations",
+               "antigravity-guide", "openai-docs", "claude-automation-recommender", "mcp-builder", "import-memory",
+               "setup-matt-pocock-skills", "migrate-workflows", "ui-plugin-navigation", "ponytail-help"]
+  }
+]
