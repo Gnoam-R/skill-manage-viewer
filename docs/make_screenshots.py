@@ -106,7 +106,7 @@ def main() -> None:
                 mock.patch.object(mgr, "UPDATER", t / "none.ps1"), mock.patch.object(mgr, "open_in_editor"), \
                 mock.patch.object(mgr, "AGENT_DIRS", dict(mgr.AGENT_DIRS)), mock.patch.object(v, "HOME", t):
             repo = demo_world(t)
-            app = v.App(with_tray=False)
+            app = v.App(with_tray=False, auto_update=False)
             app.load()
             shot(app.root, "main")
 

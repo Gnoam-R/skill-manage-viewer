@@ -28,6 +28,7 @@ from tkinter import messagebox, simpledialog
 
 import platform_support as plat
 import skill_manager as mgr
+import skill_update as upd
 
 HERE = Path(__file__).parent
 HOME = Path.home()
@@ -70,7 +71,9 @@ DARK = dict(bg="#161B22", surface="#1F2630", rail="#1A2029", line="#3A4452", tex
             accent="#7DB0FF", on_accent="#0B1220", soft="#2A3B55", warn_bg="#4A3A14", warn_fg="#FFD98A",
             danger="#FF8A80", danger_bg="#4A2220")
 FONT, FALLBACK_FONT = "Pretendard", plat.FALLBACK_FONT
-TRAY_COMMANDS = {"toggle", "add_dialog", "check_updates", "move", "load", "quit"}  # what the tray may ask the app to do
+TRAY_COMMANDS = {  # what the tray may ask the app to do
+    "toggle", "add_dialog", "check_updates", "update_app", "toggle_auto_update", "move", "load", "quit",
+}
 TRAY_NAME = "메뉴 막대" if plat.MAC else "트레이"
 DEFAULT_HINT = f"클릭: 이름 복사 · ☆: 자주 쓰는 스킬 지정 · ⋯ 또는 우클릭: 수정·삭제 · {TRAY_NAME} 아이콘으로 열기/닫기"
 
@@ -229,7 +232,9 @@ def tray_menu(put):
     return pystray.Menu(
         pystray.MenuItem("열기 / 닫기", lambda i, m: put("toggle"), default=True),
         pystray.MenuItem("스킬 추가…", lambda i, m: put("add_dialog")),
-        pystray.MenuItem("업데이트 확인", lambda i, m: put("check_updates")),
+        pystray.MenuItem("스킬 업데이트 확인", lambda i, m: put("check_updates")),
+        pystray.MenuItem("SkillDesk 업데이트 확인", lambda i, m: put("update_app")),
+        pystray.MenuItem("SkillDesk 자동 업데이트 켜기/끄기", lambda i, m: put("toggle_auto_update")),
         pystray.MenuItem("위치 전환 (우상단 ↔ 좌하단)", lambda i, m: put("move")),
         pystray.MenuItem("새로고침", lambda i, m: put("load")),
         pystray.MenuItem("종료", lambda i, m: put("quit")),
@@ -274,7 +279,7 @@ class Scroll:
 class App:
     W, H, RAIL = 900, 700, 230
 
-    def __init__(self, with_tray: bool = True):
+    def __init__(self, with_tray: bool = True, auto_update: bool = True):
         plat.dpi_aware()
         load_bundled_fonts()  # before Tk starts listing fonts
         self.root = root = tk.Tk()
@@ -308,6 +313,9 @@ class App:
         self.detail_win: DetailDialog | None = None
         self.popup: Popup | None = None
         self._last_toggle = 0.0
+        self.pending_restart: upd.Result | None = None  # an update was installed; the new code runs after a restart
+        self.restart_pill: tk.Label | None = None
+        self._failed_update = ""  # the version whose update failed, so it is reported once, not every few hours
         self._say_job = None
         self._build()
         self.query.trace_add("write", lambda *_: self.render(top=True))
@@ -321,6 +329,8 @@ class App:
             self.start_tray()
         root.after(100, self._pump)
         root.after(60_000, self._tick)
+        if auto_update:  # tests and screenshots turn this off: they must not reach out to GitHub
+            root.after(15_000, self.auto_update)
 
     # ---- widgets ----------------------------------------------------------------------------
     def px(self, n: float) -> int:
@@ -450,7 +460,7 @@ class App:
         self._label(titles, "SkillDesk", 16, bold=True).pack(anchor="w")
         self.subtitle = self._label(titles, "", 10, fg=c["muted"])
         self.subtitle.pack(anchor="w")
-        actions = tk.Frame(header, bg=c["surface"])
+        actions = self.actions = tk.Frame(header, bg=c["surface"])
         actions.pack(side="right", padx=(0, 8))
         # created before self.footer exists; the hint handlers only touch it when the pointer is over a button
         for text, cmd, hint in (("＋ 추가", self.add_dialog, "스킬 추가 (링크로 설치 · 새로 만들기)"),
@@ -493,6 +503,7 @@ class App:
         self.list = Scroll(main, c)
         self.list.wrap.pack(fill="both", expand=True, padx=14, pady=(0, 12))
         self.canvas, self.body = self.list.canvas, self.list.body
+        self._show_restart_pill()  # a theme switch rebuilds the header; keep the pill if an update is waiting
 
     def _wheel(self, e) -> None:
         try:
@@ -907,6 +918,60 @@ class App:
             return
         self.hide() if self.visible else self.show()
         self._last_toggle = time.monotonic()
+
+    # ---- updating SkillDesk itself ------------------------------------------------------------
+    def auto_update(self, manual: bool = False) -> None:
+        """Check GitHub for a newer SkillDesk and install it (see skill_update.py for when that is allowed).
+        Runs again every 6 hours by itself; manual=True (the tray item) also reports "already up to date" and why not."""
+        if not manual:
+            self.root.after(6 * 3600 * 1000, self.auto_update)
+            if not mgr.load_settings().get("auto_update", True):
+                return
+        if self.pending_restart:  # the new code is already on disk; asking GitHub again would only repeat it
+            if manual:
+                self.say("이미 새 버전을 받았습니다. 위쪽의 '다시 시작'을 누르세요", ms=6000)
+            return
+        if manual:
+            self.say("SkillDesk 업데이트 확인 중…", ms=60_000)
+        self.bg(lambda: upd.apply(), lambda res: self._update_done(res, manual))
+
+    def update_app(self) -> None:
+        self.auto_update(manual=True)
+
+    def toggle_auto_update(self) -> None:
+        on = not mgr.load_settings().get("auto_update", True)
+        mgr.save_setting("auto_update", on)
+        self.say(f"SkillDesk 자동 업데이트: {'켬' if on else '끔'}")
+
+    def _update_done(self, res, manual: bool = False) -> None:
+        if isinstance(res, Exception):
+            res = upd.Result("failed", str(res))
+        if res.status == "updated":
+            self.pending_restart = res
+            self._show_restart_pill()
+            if self.visible:
+                self.say(f"SkillDesk {res.old} → {res.new} 업데이트됨. 위쪽의 '다시 시작'을 누르면 적용됩니다", ms=10_000)
+            else:
+                self.restart()  # nobody is looking at the window, so switch to the new version right away
+        elif res.status == "failed" and (manual or res.new != self._failed_update):
+            self._failed_update = res.new
+            self.say(res.detail, warn=True, ms=10_000)
+        elif manual and res.status in ("up-to-date", "skipped"):
+            self.say("SkillDesk는 최신 버전입니다" if res.status == "up-to-date" else res.detail, ms=8000)
+
+    def _show_restart_pill(self) -> None:
+        if not self.pending_restart or (self.restart_pill and self.restart_pill.winfo_exists()):
+            return
+        c = self.c
+        pill = self.restart_pill = self._label(self.actions, "새 버전 · 다시 시작", 10, bold=True, fg=c["on_accent"], bg=c["accent"],
+                                               padx=10, pady=3, cursor="hand2")
+        pill.pack(side="left", padx=(0, 8), before=self.actions.winfo_children()[0])
+        pill.bind("<Button-1>", lambda e: self.restart())
+
+    def restart(self) -> None:
+        """Start the updated app and close this one."""
+        upd.restart(hidden=not self.visible)
+        self.quit()
 
     def quit(self) -> None:
         if self.tray:
