@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import platform_support as plat
 import skill_manager as m
 
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
@@ -76,7 +77,7 @@ class Lifecycle(unittest.TestCase):
         for d in m.AGENT_DIRS.values():
             for p in d.iterdir() if d.is_dir() else []:
                 if m.is_link(p):
-                    os.rmdir(p)
+                    plat.unlink_dir(p)
         self._tmp.cleanup()
 
     def test_install_update_relink_remove(self):

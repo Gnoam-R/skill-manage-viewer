@@ -18,6 +18,8 @@ from unittest import mock
 
 from PIL import ImageGrab
 
+import install
+import platform_support as plat
 import skill_manager as mgr
 import skill_viewer as v
 
@@ -57,6 +59,9 @@ class PanelTest(unittest.TestCase):
         for p in cls._patches:
             p.start()
         write_skill(t / "codex/legacy")  # a real folder the user made by hand
+        # so the Claude tab has several categories and a read-only skill even on a clean CI machine without plugins
+        write_skill(t / "claude/tdd")
+        write_skill(t / "claude/synced/app/grilling")  # nested = synced by the desktop app = view only
         cls.repo = t / "gitrepo"  # a git-backed skill linked into Claude Code
         write_skill(cls.repo / "skills/gitskill")
         git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
@@ -64,7 +69,7 @@ class PanelTest(unittest.TestCase):
         subprocess.run([*git, "add", "-A"], cwd=cls.repo, check=True, capture_output=True)
         subprocess.run([*git, "commit", "-qm", "init"], cwd=cls.repo, check=True, capture_output=True)
         mgr.install([cls.repo / "skills/gitskill"], ["Claude Code"])
-        cls.app = v.App(with_tray=True)
+        cls.app = v.App(with_tray=plat.WIN)  # the macOS tray is a child process; CI has no menu bar to show it in
         cls.app.root.update()
 
     @classmethod
@@ -73,7 +78,7 @@ class PanelTest(unittest.TestCase):
         for d in mgr.AGENT_DIRS.values():  # unlink junctions first so cleanup can't walk into a clone through them
             for p in d.iterdir() if d.is_dir() else []:
                 if mgr.is_link(p):
-                    os.rmdir(p)
+                    plat.unlink_dir(p)
         for p in cls._patches:
             p.stop()
         cls._tmp.cleanup()
@@ -93,7 +98,8 @@ class PanelTest(unittest.TestCase):
         time.sleep(0.7)  # let Windows finish its window fade-in, or the grab is half transparent
         win.update()
         box = (win.winfo_rootx(), win.winfo_rooty(), win.winfo_rootx() + win.winfo_width(), win.winfo_rooty() + win.winfo_height())
-        ImageGrab.grab(bbox=box).save(SHOTS / f"{name}.png")
+        if plat.WIN:  # macOS asks for screen-recording permission, which a test run can not give
+            ImageGrab.grab(bbox=box).save(SHOTS / f"{name}.png")
         return box
 
     def rows(self):
@@ -102,8 +108,9 @@ class PanelTest(unittest.TestCase):
     # ---- window, tray, list ---------------------------------------------------------------
     def test_01_tray_corner_and_toggle(self):
         app = self.app
-        self.assertTrue(app.tray is not None and app.tray.HAS_MENU)
-        left, top, right, bottom = v.work_area()
+        if plat.WIN:
+            self.assertTrue(app.tray is not None and app.tray.HAS_MENU)
+        left, top, right, bottom = plat.work_area(app.root)
         x, y, x2, y2 = self.shot(app.root, "t1_default")
         self.assertTrue(app.visible and x2 <= right and y >= top)
         app.move()
@@ -120,16 +127,22 @@ class PanelTest(unittest.TestCase):
     def test_01b_window_has_minimize_and_close_but_no_toolwindow_style(self):
         app = self.app
         app.root.update()
-        hwnd = ctypes.windll.user32.GetParent(app.root.winfo_id())
-        style, ex = ctypes.windll.user32.GetWindowLongW(hwnd, -16), ctypes.windll.user32.GetWindowLongW(hwnd, -20)
-        self.assertTrue(style & 0x20000, "WS_MINIMIZEBOX missing")  # the button the user asked for
-        self.assertFalse(ex & 0x80, "WS_EX_TOOLWINDOW would hide the minimize button")
+        if plat.WIN:
+            hwnd = ctypes.windll.user32.GetParent(app.root.winfo_id())
+            style, ex = ctypes.windll.user32.GetWindowLongW(hwnd, -16), ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+            self.assertTrue(style & 0x20000, "WS_MINIMIZEBOX missing")  # the button the user asked for
+            self.assertFalse(ex & 0x80, "WS_EX_TOOLWINDOW would hide the minimize button")
         app.root.iconify()  # minimizing sends the window to the tray instead of leaving it on the taskbar
         self.settle(lambda: not app.visible)
         self.assertEqual(app.root.state(), "withdrawn")
         app.events.put("toggle")
         app._pump()
         self.assertTrue(app.visible and app.root.state() == "normal")
+
+    def test_app_name_is_the_same_everywhere(self):
+        app = self.app
+        self.assertEqual(app.root.title(), install.APP_NAME)  # window title = Start menu / Spotlight name
+        self.assertIn(install.APP_NAME, texts(app.root))  # header
 
     def test_02_origin_labels(self):
         legacy = find(self.app, "Codex", "legacy")
@@ -413,13 +426,10 @@ def low_contrast(app, top, where):
                 ("active", w.cget("activeforeground"), w.cget("activebackground"), need),
                 ("disabled", w.cget("disabledforeground"), w.cget("bg"), 3.0),
             ]
-        elif isinstance(w, tk.Button):
-            if str(w.cget("state")) == "disabled":
-                pairs = [("disabled", w.cget("disabledforeground"), w.cget("bg"), 3.0)]
-            else:
-                pairs = [("fg", w.cget("fg"), w.cget("bg"), need), ("active", w.cget("activeforeground"), w.cget("activebackground"), need)]
         elif isinstance(w, (tk.Label, tk.Checkbutton, tk.Entry)):
             pairs = [("fg", w.cget("fg"), w.cget("bg"), need)]
+            if isinstance(w, tk.Label) and str(w.cget("state")) == "disabled":  # a disabled button
+                pairs = [("disabled", w.cget("disabledforeground"), w.cget("bg"), 3.0)]
             if isinstance(w, tk.Checkbutton):
                 pairs.append(("check", w.cget("fg"), w.cget("selectcolor"), 3.0))
         for kind, fg, bg, limit in pairs:
@@ -428,6 +438,65 @@ def low_contrast(app, top, where):
                 text = w.cget("text") if "text" in w.keys() else w.winfo_class()  # noqa: SIM118 - Tk widgets have keys() but no __contains__
                 out.append(f"{where}: {str(text)[:20]!r} {kind} {fg} on {bg} = {r:.2f} < {limit}")
     return out
+
+
+class PlatformTest(unittest.TestCase):
+    """Behaviour that must be the same on Windows and macOS."""
+
+    def test_directory_link_roundtrip(self):
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            real = t / "real"
+            real.mkdir()
+            (real / "SKILL.md").write_text("x", encoding="utf-8")
+            link = t / "link"
+            plat.make_dir_link(link, real)
+            self.assertTrue(mgr.is_link(link) and (link / "SKILL.md").is_file())
+            plat.unlink_dir(link)  # removes only the link
+            self.assertFalse(os.path.lexists(link))
+            self.assertTrue((real / "SKILL.md").is_file())
+            with self.assertRaises(OSError):
+                plat.unlink_dir(real)  # a real folder is never removed this way
+
+    def test_second_copy_of_the_app_is_refused(self):
+        name = f"skill-catalog-test-{os.getpid()}"
+        self.assertFalse(plat.already_running(name))
+        other = subprocess.run(
+            ["python", "-c", f"import platform_support as p; print(p.already_running({name!r}))"],
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent,
+        )
+        self.assertEqual(other.stdout.strip(), "True")
+
+    def test_right_click_sequences_match_the_platform(self):
+        self.assertEqual(plat.RIGHT_CLICK[0], "<Button-2>" if plat.MAC else "<Button-3>")
+
+    def test_tray_menu_builds_and_only_known_commands_are_accepted(self):
+        sent = []
+        menu = v.tray_menu(sent.append)
+        for item in menu.items:
+            if item.text != "":
+                item(None)  # pystray calls the action with (icon, item); the lambdas ignore them
+        self.assertEqual(set(sent), v.TRAY_COMMANDS)
+        self.assertTrue(all(c in v.TRAY_COMMANDS for c in sent))
+
+    def test_tray_child_output_is_filtered(self):
+        class Fake:
+            stdout = ["toggle\n", "rm -rf /\n", "quit\n", "__class__\n"]
+
+        class Stub:
+            tray_proc = Fake()
+            events = __import__("queue").Queue()
+
+        v.App._read_tray(Stub())  # type: ignore[arg-type]
+        got = []
+        while not Stub.events.empty():
+            got.append(Stub.events.get_nowait())
+        self.assertEqual(got, ["toggle", "quit"])
+
+    def test_font_scale_keeps_sizes_comparable(self):
+        self.assertAlmostEqual(plat.FONT_SCALE, 4 / 3 if plat.MAC else 1.0)
 
 
 class CategoryTest(unittest.TestCase):
@@ -456,6 +525,22 @@ class CategoryTest(unittest.TestCase):
 
 class DiscoveryTest(unittest.TestCase):
     """What happens on someone else's PC: other layouts, missing agents, broken files. No Tk needed."""
+
+    def test_linked_skills_are_listed_and_link_loops_do_not_hang(self):
+        # macOS CI caught this: installed skills are symlinks there, and os.walk does not enter them by default
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            source = t / "source/alpha"
+            write_skill(source)
+            agent = t / "agent"
+            agent.mkdir()
+            plat.make_dir_link(agent / "alpha", source)
+            plat.make_dir_link(agent / "loop", agent)  # points back up the tree
+            try:
+                self.assertEqual([s["name"] for s in v.scan(agent)], ["alpha"])
+            finally:
+                plat.unlink_dir(agent / "alpha")
+                plat.unlink_dir(agent / "loop")
 
     def test_odd_skill_files_do_not_break_the_list(self):
         with tempfile.TemporaryDirectory() as t:

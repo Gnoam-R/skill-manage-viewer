@@ -19,6 +19,8 @@ from functools import cache
 from pathlib import Path
 from urllib.parse import urlparse
 
+import platform_support as plat
+
 HOME = Path.home()
 STORE = HOME / ".skill-manager"
 # Where each agent keeps its config; Claude Code and Codex honour these env vars, so follow them on other people's PCs.
@@ -33,7 +35,6 @@ AGENT_DIRS = {
 UPDATER = HOME / ".mattpocock-skills-update.ps1"
 
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW: keep git/cmd from flashing a console under pythonw
 
 
 class ManagerError(Exception):
@@ -44,7 +45,7 @@ class ManagerError(Exception):
 def run(cmd: list[str], timeout: int = 180) -> str:
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=timeout, creationflags=NO_WINDOW, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                           timeout=timeout, creationflags=plat.NO_WINDOW, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
     except subprocess.TimeoutExpired:
         raise ManagerError(f"시간 초과: {' '.join(cmd[:4])}…") from None
     if r.returncode:
@@ -190,8 +191,11 @@ class Result:
     status: str  # installed | replaced | exists | conflict
 
 
-def make_junction(link: Path, target: Path) -> None:
-    run(["cmd", "/c", "mklink", "/J", str(link), str(target)], timeout=30)
+def make_link(link: Path, target: Path) -> None:
+    try:
+        plat.make_dir_link(link, target)
+    except OSError as e:
+        raise ManagerError(f"링크를 만들지 못했습니다: {link} ({e})") from e
 
 
 def trash(p: Path) -> Path:
@@ -204,7 +208,7 @@ def trash(p: Path) -> Path:
 def drop(p: Path) -> None:
     """Remove a skill from an agent folder: a link is just unlinked, a real folder goes to the trash."""
     if is_link(p):
-        os.rmdir(p)
+        plat.unlink_dir(p)
     else:
         trash(p)
 
@@ -218,7 +222,7 @@ def install(skill_dirs: list[Path], agents: list[str], replace: bool = False) ->
             link = AGENT_DIRS[agent] / src.name
             status = "installed"
             if is_link(link) and not link.exists():  # dangling link: nothing of the user's to protect
-                os.rmdir(link)
+                plat.unlink_dir(link)
             elif link.exists():
                 if is_link(link) and target_of(link) == src.resolve():
                     out.append(Result(agent, src.name, "exists"))
@@ -229,7 +233,7 @@ def install(skill_dirs: list[Path], agents: list[str], replace: bool = False) ->
                 drop(link)
                 status = "replaced"
             link.parent.mkdir(parents=True, exist_ok=True)
-            make_junction(link, src)
+            make_link(link, src)
             out.append(Result(agent, src.name, status))
     return out
 
@@ -259,7 +263,7 @@ def remove(agent: str, name: str) -> Path | None:
     kind, _ = origin(p)
     t = target_of(p)
     if is_link(p):
-        os.rmdir(p)
+        plat.unlink_dir(p)
         moved = None
     else:
         moved = trash(p)
@@ -303,9 +307,9 @@ def relink(repo: Path) -> list[str]:
         for link in (d.iterdir() if d.is_dir() else []):
             if not (is_link(link) and not link.exists() and root in target_of(link).parents):
                 continue
-            os.rmdir(link)
+            plat.unlink_dir(link)
             if link.name in by_name:
-                make_junction(link, by_name[link.name])
+                make_link(link, by_name[link.name])
             else:
                 gone.append(link.name)
     return gone
@@ -349,7 +353,4 @@ def save_setting(key: str, value: str) -> None:
 
 
 def open_in_editor(path: Path) -> None:
-    try:
-        os.startfile(path)  # type: ignore[attr-defined]  # Windows only
-    except OSError:
-        subprocess.Popen(["notepad", str(path)])
+    plat.open_path(path)

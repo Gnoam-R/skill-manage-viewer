@@ -1,4 +1,4 @@
-"""Skill catalog panel: lists the skills each agent (Claude Code / Codex / Antigravity) can use, grouped by
+"""SkillDesk: lists the skills each agent (Claude Code / Codex / Antigravity) can use, grouped by
 category (category rail on the left, skills on the right), and installs / updates / edits / deletes them.
 Lives in an always-on-top corner window that is opened and closed from a tray icon.
 
@@ -12,11 +12,11 @@ Font: Pretendard is loaded from ./fonts/*.otf when present (private to this proc
 """
 
 import contextlib
-import ctypes
 import json
 import os
 import queue
 import re
+import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -25,6 +25,7 @@ from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, simpledialog
 
+import platform_support as plat
 import skill_manager as mgr
 
 HERE = Path(__file__).parent
@@ -59,8 +60,10 @@ LIGHT = dict(bg="#F4F6F9", surface="#FFFFFF", rail="#EBEFF5", line="#CBD3DE", te
              accent="#1D5FD0", on_accent="#FFFFFF", soft="#E3ECFC", warn_bg="#FFF1D6", warn_fg="#7A4A00")
 DARK = dict(bg="#161B22", surface="#1F2630", rail="#1A2029", line="#3A4452", text="#F3F6FA", muted="#C2CBD6",
             accent="#7DB0FF", on_accent="#0B1220", soft="#2A3B55", warn_bg="#4A3A14", warn_fg="#FFD98A")
-FONT, FALLBACK_FONT = "Pretendard", "Malgun Gothic"
-DEFAULT_HINT = "클릭: 이름 복사 · ⋯ 또는 우클릭: 수정·삭제 · 트레이 아이콘으로 열기/닫기"
+FONT, FALLBACK_FONT = "Pretendard", plat.FALLBACK_FONT
+TRAY_COMMANDS = {"toggle", "add_dialog", "check_updates", "move", "load", "quit"}  # what the tray may ask the app to do
+TRAY_NAME = "메뉴 막대" if plat.MAC else "트레이"
+DEFAULT_HINT = f"클릭: 이름 복사 · ⋯ 또는 우클릭: 수정·삭제 · {TRAY_NAME} 아이콘으로 열기/닫기"
 
 
 # ---- data -------------------------------------------------------------------------------------
@@ -88,7 +91,14 @@ def scan(root: Path, prefix: str = "") -> list[dict]:
     out = []
     if not root.is_dir():
         return out
-    for dirpath, dirs, files in os.walk(root):
+    seen: set[str] = set()
+    # follow links: on macOS installed skills are symlinks, which os.walk would otherwise list but never enter
+    for dirpath, dirs, files in os.walk(root, followlinks=True):
+        real = os.path.realpath(dirpath)
+        if real in seen:  # a link pointing back up the tree would make the walk endless
+            dirs.clear()
+            continue
+        seen.add(real)
         if "SKILL.md" in files:
             try:
                 s = mgr.parse(Path(dirpath) / "SKILL.md")
@@ -168,21 +178,9 @@ def check() -> None:
 
 
 # ---- windows helpers ---------------------------------------------------------------------------
-def work_area() -> tuple[int, int, int, int]:
-    """Screen area minus the taskbar, in pixels."""
-    class RECT(ctypes.Structure):
-        _fields_ = [(n, ctypes.c_long) for n in ("left", "top", "right", "bottom")]
-    r = RECT()
-    ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0)  # SPI_GETWORKAREA
-    return r.left, r.top, r.right, r.bottom
-
-
 def load_bundled_fonts() -> int:
     """Make ./fonts/*.otf|ttf usable by this process only (nothing is installed system-wide)."""
-    n = 0
-    for p in sorted((HERE / "fonts").glob("*.[ot]tf")):
-        n += bool(ctypes.windll.gdi32.AddFontResourceExW(str(p), 0x10, 0))  # FR_PRIVATE
-    return n
+    return sum(plat.register_font(p) for p in sorted((HERE / "fonts").glob("*.[ot]tf")))
 
 
 def icon_image(size: int = 256):
@@ -202,6 +200,30 @@ def icon_image(size: int = 256):
 
 def make_ico(path: Path) -> None:
     icon_image(256).save(path, sizes=[(256, 256), (64, 64), (48, 48), (32, 32), (24, 24), (16, 16)])
+
+
+def tray_menu(put):
+    import pystray
+    return pystray.Menu(
+        pystray.MenuItem("열기 / 닫기", lambda i, m: put("toggle"), default=True),
+        pystray.MenuItem("스킬 추가…", lambda i, m: put("add_dialog")),
+        pystray.MenuItem("업데이트 확인", lambda i, m: put("check_updates")),
+        pystray.MenuItem("위치 전환 (우상단 ↔ 좌하단)", lambda i, m: put("move")),
+        pystray.MenuItem("새로고침", lambda i, m: put("load")),
+        pystray.MenuItem("종료", lambda i, m: put("quit")),
+    )
+
+
+def tray_child() -> None:
+    """macOS only: show the menu-bar icon and print the command of each click; exit when the app closes our stdin."""
+    import pystray
+    icon = pystray.Icon("skill_viewer", icon_image(64), "SkillDesk", tray_menu(lambda cmd: print(cmd, flush=True)))
+    threading.Thread(target=lambda: (sys.stdin.read(), icon.stop()), daemon=True).start()
+    icon.run()
+
+
+def make_icns(path: Path) -> None:
+    icon_image(1024).save(path, format="ICNS")
 
 
 class Scroll:
@@ -226,20 +248,19 @@ class App:
     W, H, RAIL = 900, 700, 230
 
     def __init__(self, with_tray: bool = True):
-        with contextlib.suppress(AttributeError, OSError):
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        plat.dpi_aware()
         load_bundled_fonts()  # before Tk starts listing fonts
         self.root = root = tk.Tk()
-        root.title("스킬 카탈로그")
+        root.title("SkillDesk")
         from PIL import ImageTk
         self._icon = ImageTk.PhotoImage(icon_image(64))  # keep a reference or Tk drops it
         root.iconphoto(True, self._icon)  # pyright: ignore[reportArgumentType]
         root.attributes("-topmost", True)
         root.resizable(False, True)  # no maximize; minimize and close stay
         self.family = FONT if FONT in tkfont.families(root) else FALLBACK_FONT
-        self.scale = root.winfo_fpixels("1i") / 96
-        self.name_font = tkfont.Font(family=self.family, size=11, weight="bold", slant="roman")
-        self.tag_font = tkfont.Font(family=self.family, size=9, slant="roman")
+        self.scale = plat.pixel_scale(root)
+        self.name_font = tkfont.Font(family=self.family, size=round(11 * plat.FONT_SCALE), weight="bold", slant="roman")
+        self.tag_font = tkfont.Font(family=self.family, size=round(9 * plat.FONT_SCALE), slant="roman")
         self.theme = mgr.load_settings().get("theme", "light")  # light unless the user switched
         self.c = DARK if self.theme == "dark" else LIGHT
         root.configure(bg=self.c["bg"])
@@ -253,6 +274,7 @@ class App:
         self.query = tk.StringVar()
         self.events: queue.Queue = queue.Queue()
         self.tray = None
+        self.tray_proc: subprocess.Popen | None = None
         self.dialog: AddDialog | None = None
         self._say_job = None
         self._build()
@@ -274,7 +296,7 @@ class App:
 
     def f(self, size: int = 11, bold: bool = False) -> tuple:
         """Font spec. Always upright ('roman'); nothing in this app is ever italic."""
-        return (self.family, size, "bold" if bold else "normal", "roman")
+        return (self.family, round(size * plat.FONT_SCALE), "bold" if bold else "normal", "roman")
 
     def cat_colors(self, cat: str | None) -> tuple[str, str]:
         """(text color, tint) for a category; None (= all) uses the app accent."""
@@ -296,17 +318,23 @@ class App:
         return b
 
     def _button(self, parent, text, command, primary=False):
+        """A Label dressed as a button: Tk on macOS draws native buttons and ignores their colors."""
         c = self.c
-        return tk.Button(parent, text=text, command=command, font=self.f(11, primary),
-                         relief="flat", bd=0, padx=16, pady=7, cursor="hand2",
-                         bg=c["accent"] if primary else c["surface"], fg=c["on_accent"] if primary else c["text"],
-                         activebackground=c["accent"] if primary else c["soft"],
-                         activeforeground=c["on_accent"] if primary else c["accent"],
-                         highlightthickness=0 if primary else 1, highlightbackground=c["line"],
-                         disabledforeground=c["muted"])
+        base = c["accent"] if primary else c["surface"]
+        b = tk.Label(parent, text=text, font=self.f(11, primary), padx=16, pady=7, cursor="hand2", bg=base,
+                     fg=c["on_accent"] if primary else c["text"], disabledforeground=c["muted"],
+                     highlightthickness=0 if primary else 1, highlightbackground=c["line"])
 
-    def _enable(self, button: tk.Button, on: bool) -> None:
-        """Tk keeps a disabled button's background, so grey text would sit on the accent blue; swap both."""
+        def on() -> bool:
+            return str(b.cget("state")) != "disabled"
+        b.bind("<Button-1>", lambda e: command() if on() else None)
+        if not primary:
+            b.bind("<Enter>", lambda e: b.config(bg=c["soft"]) if on() else None)
+            b.bind("<Leave>", lambda e: b.config(bg=base))
+        return b
+
+    def _enable(self, button: tk.Label, on: bool) -> None:
+        """A disabled button gets a grey background too, so its grey text never sits on the accent color."""
         c = self.c
         button.config(state="normal" if on else "disabled", bg=c["accent"] if on else c["line"],
                       cursor="hand2" if on else "arrow")
@@ -356,7 +384,7 @@ class App:
         header.pack(fill="x")
         titles = tk.Frame(header, bg=c["surface"])
         titles.pack(side="left", padx=(18, 0), pady=(14, 12))
-        self._label(titles, "스킬 카탈로그", 16, bold=True).pack(anchor="w")
+        self._label(titles, "SkillDesk", 16, bold=True).pack(anchor="w")
         self.subtitle = self._label(titles, "", 10, fg=c["muted"])
         self.subtitle.pack(anchor="w")
         actions = tk.Frame(header, bg=c["surface"])
@@ -415,9 +443,7 @@ class App:
             scroller.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
 
     def _dark_titlebar(self, win=None) -> None:
-        with contextlib.suppress(AttributeError, OSError):
-            hwnd = ctypes.windll.user32.GetParent((win or self.root).winfo_id())
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(ctypes.c_int(self.theme == "dark")), 4)
+        plat.dark_titlebar(win or self.root, self.theme == "dark")
 
     def toggle_theme(self) -> None:
         self.theme = "light" if self.theme == "dark" else "dark"
@@ -564,7 +590,8 @@ class App:
             w.bind("<Enter>", lambda e: tint(c["soft"]))
             w.bind("<Leave>", lambda e: tint(c["surface"]))
             w.bind("<Button-1>", lambda e, n=s["name"]: self.copy(n))
-            w.bind("<Button-3>", lambda e, s=s: self.row_menu(s, e.x_root, e.y_root))
+            for seq in plat.RIGHT_CLICK:
+                w.bind(seq, lambda e, s=s: self.row_menu(s, e.x_root, e.y_root))
         more.bind("<Button-1>", lambda e, s=s: self.row_menu(s, e.x_root, e.y_root))
 
     def copy(self, name: str) -> None:
@@ -695,7 +722,7 @@ class App:
         self.dialog = AddDialog(self)
 
     def place(self) -> None:
-        left, top, right, bottom = work_area()
+        left, top, right, bottom = plat.work_area(self.root)
         w, h = min(self.px(self.W), right - left - 24), min(self.px(self.H), bottom - top - 24)
         x = right - w - 12 if self.corner == "tr" else left + 12
         y = top + 12 if self.corner == "tr" else bottom - h - 12
@@ -718,8 +745,10 @@ class App:
         self.visible = False
 
     def _on_unmap(self, e) -> None:
-        if e.widget is self.root and self.root.state() == "iconic":  # the minimize button: go to the tray, not the taskbar
-            self.hide()
+        # the minimize button: go to the tray, not the taskbar / Dock. macOS reports 'iconic' only after the
+        # unmap event, so look a moment later.
+        if e.widget is self.root:
+            self.root.after(150, lambda: self.hide() if self.root.state() == "iconic" else None)
 
     def toggle(self) -> None:
         self.hide() if self.visible else self.show()
@@ -727,26 +756,36 @@ class App:
     def quit(self) -> None:
         if self.tray:
             self.tray.stop()
+        if self.tray_proc:
+            self.tray_proc.terminate()
         self.root.destroy()
 
     def start_tray(self) -> None:
+        if plat.MAC:
+            # pystray must own the main thread on macOS and Tk needs it too, so the menu-bar icon lives in its own
+            # process and reports clicks as one command per line.
+            self.tray_proc = subprocess.Popen([sys.executable, str(HERE / "skill_viewer.py"), "--tray-child"],
+                                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            threading.Thread(target=self._read_tray, daemon=True).start()
+            return
         import pystray
-        put = self.events.put  # tray callbacks run on pystray's thread; the Tk thread drains the queue
-        menu = pystray.Menu(
-            pystray.MenuItem("열기 / 닫기", lambda i, m: put("toggle"), default=True),
-            pystray.MenuItem("스킬 추가…", lambda i, m: put("add_dialog")),
-            pystray.MenuItem("업데이트 확인", lambda i, m: put("check_updates")),
-            pystray.MenuItem("위치 전환 (우상단 ↔ 좌하단)", lambda i, m: put("move")),
-            pystray.MenuItem("새로고침", lambda i, m: put("load")),
-            pystray.MenuItem("종료", lambda i, m: put("quit")),
-        )
-        self.tray = pystray.Icon("skill_viewer", icon_image(64), "스킬 카탈로그", menu)
+        # tray callbacks run on pystray's thread; the Tk thread drains the queue
+        self.tray = pystray.Icon("skill_viewer", icon_image(64), "SkillDesk", tray_menu(self.events.put))
         self.tray.run_detached()
+
+    def _read_tray(self) -> None:
+        if self.tray_proc and self.tray_proc.stdout:
+            for line in self.tray_proc.stdout:
+                if line.strip() in TRAY_COMMANDS:  # never act on anything else a child process prints
+                    self.events.put(line.strip())
 
     def _pump(self) -> None:
         while not self.events.empty():
             item = self.events.get_nowait()
-            item() if callable(item) else getattr(self, item)()
+            if callable(item):
+                item()
+            elif item in TRAY_COMMANDS:
+                getattr(self, item)()
         self.root.after(100, self._pump)
 
     def _tick(self) -> None:
@@ -946,19 +985,14 @@ class AddDialog:
         mgr.open_in_editor(d / "SKILL.md")
 
 
-_mutex = None  # keeps the named mutex handle alive for the life of the process
-
-
-def already_running() -> bool:
-    global _mutex
-    _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "AgentSkillCatalogPanel")
-    return ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
-
-
 if __name__ == "__main__":
-    if "--check" in sys.argv:
+    if "--tray-child" in sys.argv:
+        tray_child()
+    elif "--check" in sys.argv:
         check()
     elif "--make-icon" in sys.argv:
         make_ico(HERE / "skill_viewer.ico")
-    elif not already_running():
+    elif "--make-icns" in sys.argv:
+        make_icns(HERE / "skill_viewer.icns")
+    elif not plat.already_running():
         App().run(hidden="--hidden" in sys.argv)
