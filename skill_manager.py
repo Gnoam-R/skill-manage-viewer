@@ -347,7 +347,7 @@ def load_settings() -> dict:
         return {}
 
 
-def save_setting(key: str, value: str) -> None:
+def save_setting(key: str, value: object) -> None:
     STORE.mkdir(parents=True, exist_ok=True)
     (STORE / "settings.json").write_text(json.dumps({**load_settings(), key: value}, indent=1), encoding="utf-8")
 

@@ -88,6 +88,7 @@ def bounds(win) -> tuple[int, int, int, int]:
 
 def shot(win, name: str) -> None:
     from PIL import ImageGrab
+    win.attributes("-topmost", True)  # the app no longer stays on top by itself; nothing may cover it while it is grabbed
     for _ in range(3):
         win.update()
         time.sleep(0.4)  # let the window finish fading in
@@ -147,6 +148,13 @@ def main() -> None:
 
             app.set_agent("Codex")
             shot(app.root, "codex")
+
+            app.set_agent("Claude Code")  # last, so the stars do not show up in the pictures above
+            by_name = {s["name"].split(":")[-1]: s for s in app.data["Claude Code"]}
+            for n in ("tdd", "grilling", "systematic-debugging", "pdf"):
+                app.toggle_pin(by_name[n])
+            app.pick(v.STAR)
+            shot(app.root, "favorites")
             app.quit()
             for d in mgr.AGENT_DIRS.values():  # unlink before the temp folder is removed
                 for p in (d.iterdir() if d.is_dir() else []):

@@ -1,6 +1,6 @@
 """SkillDesk: lists the skills each agent (Claude Code / Codex / Antigravity) can use, grouped by
 category (category rail on the left, skills on the right), and installs / updates / edits / deletes them.
-Lives in an always-on-top corner window that is opened and closed from a tray icon.
+Lives in a corner window that is opened and closed from a tray icon.
 
   pythonw skill_viewer.py            start (window visible; minimize or close hides it to the tray)
   pythonw skill_viewer.py --hidden   start in the tray only
@@ -40,7 +40,11 @@ CATALOG = json.loads((HERE / "skill_categories.json").read_text(encoding="utf-8"
 CATEGORIES = [(c["name"], c["keywords"]) for c in CATALOG]
 CATEGORY_OF = {skill: c["name"] for c in CATALOG for skill in c["skills"]}
 OTHER = "기타"
-ABOUT = {c["name"]: c["about"] for c in CATALOG} | {OTHER: "어느 카테고리에도 맞지 않는 스킬"}
+STAR = "★ 자주 쓰는 스킬"  # rail entry listing what the user starred, separately for each agent
+ABOUT = {c["name"]: c["about"] for c in CATALOG} | {
+    OTHER: "어느 카테고리에도 맞지 않는 스킬",
+    STAR: "☆를 눌러 지정한 스킬만 모아 봅니다",
+}
 AGENTS = list(mgr.AGENT_DIRS)
 
 # Every category gets its own hue: (text on light, tint on light, text on dark, tint on dark).
@@ -56,6 +60,8 @@ CAT_COLORS = {
     "에이전트·스킬 설정": ("#BE185D", "#FCE4EF", "#FF8FBF", "#4D1F37"),
     OTHER: ("#52525B", "#ECECEF", "#C4C4CC", "#33333A"),
 }
+# The star entry is not a category, so its colors stay out of CAT_COLORS (a test pairs that with skill_categories.json).
+STAR_COLORS = ("#854F0B", "#FAEEDA", "#EF9F27", "#3F2A0A")
 
 LIGHT = dict(bg="#F4F6F9", surface="#FFFFFF", rail="#EBEFF5", line="#CBD3DE", text="#0F172A", muted="#475569",
              accent="#1D5FD0", on_accent="#FFFFFF", soft="#E3ECFC", warn_bg="#FFF1D6", warn_fg="#7A4A00",
@@ -66,7 +72,7 @@ DARK = dict(bg="#161B22", surface="#1F2630", rail="#1A2029", line="#3A4452", tex
 FONT, FALLBACK_FONT = "Pretendard", plat.FALLBACK_FONT
 TRAY_COMMANDS = {"toggle", "add_dialog", "check_updates", "move", "load", "quit"}  # what the tray may ask the app to do
 TRAY_NAME = "메뉴 막대" if plat.MAC else "트레이"
-DEFAULT_HINT = f"클릭: 이름 복사 · ⋯ 또는 우클릭: 수정·삭제 · {TRAY_NAME} 아이콘으로 열기/닫기"
+DEFAULT_HINT = f"클릭: 이름 복사 · ☆: 자주 쓰는 스킬 지정 · ⋯ 또는 우클릭: 수정·삭제 · {TRAY_NAME} 아이콘으로 열기/닫기"
 
 
 # ---- data -------------------------------------------------------------------------------------
@@ -177,6 +183,13 @@ def collect(agent: str) -> list[dict]:
     return skills
 
 
+def load_pins() -> dict[str, set[str]]:
+    """Starred skill names per agent, from settings.json. Anything malformed counts as 'nothing starred'."""
+    raw = mgr.load_settings().get("pins")
+    raw = raw if isinstance(raw, dict) else {}
+    return {a: {n for n in raw[a] if isinstance(n, str)} if isinstance(raw.get(a), list) else set() for a in AGENTS}
+
+
 def check() -> None:
     for a in AGENTS:
         skills = collect(a)
@@ -269,7 +282,6 @@ class App:
         from PIL import ImageTk
         self._icon = ImageTk.PhotoImage(icon_image(64))  # keep a reference or Tk drops it
         root.iconphoto(True, self._icon)  # pyright: ignore[reportArgumentType]
-        root.attributes("-topmost", True)
         root.resizable(False, True)  # no maximize; minimize and close stay
         self.family = FONT if FONT in tkfont.families(root) else FALLBACK_FONT
         self.scale = plat.pixel_scale(root)
@@ -282,6 +294,9 @@ class App:
         self.visible = True
         self.cat: str | None = None  # category picked in the rail; None = all
         self.shown: list[dict] = []
+        self.sections: dict[str, tk.Frame] = {}  # built category groups of the list; see render()
+        self.pins = load_pins()  # starred skill names per agent
+        self.icons: dict[str, list[tk.Label]] = {}  # the ☆/★ labels on screen for each skill name (it can be in two groups)
         self.updatable: set[Path] = set()
         self.data: dict[str, list[dict]] = {}
         self.agent = tk.StringVar(value=AGENTS[0])
@@ -319,7 +334,7 @@ class App:
         """(text color, tint) for a category; None (= all) uses the app accent."""
         if cat is None:
             return self.c["accent"], self.c["soft"]
-        fg_l, soft_l, fg_d, soft_d = CAT_COLORS[cat]
+        fg_l, soft_l, fg_d, soft_d = STAR_COLORS if cat == STAR else CAT_COLORS[cat]
         return (fg_d, soft_d) if self.theme == "dark" else (fg_l, soft_l)
 
     def _label(self, parent, text="", size=11, bold=False, fg=None, bg=None, **kw):
@@ -526,8 +541,10 @@ class App:
     # ---- list -------------------------------------------------------------------------------
     def load(self) -> None:
         mgr.version.cache_clear()
-        self.data = {a: collect(a) for a in AGENTS}
-        self.render()
+        data = {a: collect(a) for a in AGENTS}
+        if data != self.data:  # rescanning is cheap; redrawing is not, and would also reset what the user is reading
+            self.data = data
+            self.render()
 
     def set_agent(self, name: str) -> None:
         self.agent.set(name)
@@ -536,41 +553,60 @@ class App:
 
     def pick(self, cat: str | None) -> None:
         self.cat = cat
-        self.render(top=True)
+        self.render(top=True, rebuild=False)
 
-    def render(self, top: bool = False) -> None:
+    def render(self, top: bool = False, rebuild: bool = True) -> None:
+        """rebuild=False (a category click) keeps the groups already built and only shows the picked ones."""
         c, agent = self.c, self.agent.get()
         q = self.query.get().strip().lower()
         everything = self.data.get(agent, [])
         found = [s for s in everything if q in " ".join((s["name"], s["note"], s["desc"], s["origin"])).lower()]
         counts = Counter(s["cat"] for s in found)
-        if self.cat not in counts:  # the picked category vanished (search or refresh)
+        starred = [s for s in found if s["name"] in self.pins[agent]]
+        if self.cat not in counts and self.cat != STAR:  # the picked category vanished (search or refresh)
             self.cat = None
-        self.shown = [s for s in found if self.cat in (None, s["cat"])]
+        self.shown = starred if self.cat == STAR else [s for s in found if self.cat in (None, s["cat"])]
         self._restyle_tabs(agent, {a: f"{a}  {len(self.data.get(a, []))}" for a in AGENTS})
         self.subtitle.config(text=f"{agent}에서 사용할 수 있는 스킬")
-        self._draw_rail(counts, len(found))
+        self._draw_rail(counts, len(found), len(starred))
         self.count.config(text=f"{len(self.shown)}개 스킬" + (f" · '{q}' 검색 결과" if q else ""))
-        self.list.clear()
-        for cat in [n for n, _ in CATEGORIES] + [OTHER]:
-            items = [s for s in self.shown if s["cat"] == cat]
-            if items:
-                self._section(cat, len(items))
-                for s in items:
-                    self._row(s)
+        if rebuild or not self.shown:  # data, agent, search or theme changed (or only the empty note is up): groups are stale
+            self.list.clear()
+            self.sections, self.icons = {}, {}
+        groups = [(STAR, self.shown)] if self.cat == STAR else [
+            (cat, [s for s in self.shown if s["cat"] == cat]) for cat in [n for n, _ in CATEGORIES] + [OTHER]
+        ]
+        wanted = [self._group(cat, items) for cat, items in groups if items]
+        for w in self.body.pack_slaves():
+            if w not in wanted:
+                w.pack_forget()
+        packed = [g for g in wanted if g.winfo_manager()]  # groups already on screen stay put: laying the list out again is the slow part
+        prev = None
+        for g in wanted:
+            if not g.winfo_manager():
+                if prev:
+                    g.pack(fill="x", after=prev)
+                elif packed:
+                    g.pack(fill="x", before=packed[0])
+                else:
+                    g.pack(fill="x")
+            prev = g
         if not self.shown:
             msg = ("일치하는 스킬이 없습니다" if everything else
                    f"{agent}에 설치된 스킬이 없습니다.\n\n{mgr.AGENT_DIRS[agent]}\n\n위의 ＋ 추가에서 설치할 수 있습니다.")
+            if self.cat == STAR and everything and not q:
+                msg = "아직 지정한 스킬이 없습니다\n\n스킬 이름 앞의 ☆를 눌러\n자주 쓰는 스킬로 지정하세요."
             self._label(self.body, msg, 11, fg=c["muted"], pady=40, padx=20, justify="center").pack(fill="x")
         if top:
             self.canvas.yview_moveto(0)
 
-    def _draw_rail(self, counts: Counter, total: int) -> None:
+    def _draw_rail(self, counts: Counter, total: int, starred: int) -> None:
         c = self.c
         for w in self.rail.winfo_children():
             w.destroy()
         self._label(self.rail, "카테고리", 10, fg=c["muted"], bg=c["rail"], anchor="w", padx=16, pady=10).pack(fill="x")
-        for cat, n in [(None, total)] + [(k, counts[k]) for k in [n for n, _ in CATEGORIES] + [OTHER] if counts[k]]:
+        # the star entry is always there, even at 0, so the feature can be found
+        for cat, n in [(STAR, starred), (None, total)] + [(k, counts[k]) for k in [n for n, _ in CATEGORIES] + [OTHER] if counts[k]]:
             fg, soft = self.cat_colors(cat)
             on = cat == self.cat
             row = tk.Frame(self.rail, bg=soft if on else c["rail"], cursor="hand2")
@@ -587,9 +623,18 @@ class App:
                 w.bind("<Enter>", lambda e, t=about: self.footer.config(text=t, fg=c["text"]))
                 w.bind("<Leave>", lambda e: self.footer.config(text=DEFAULT_HINT, fg=c["muted"]))
 
-    def _section(self, cat: str, n: int) -> None:
+    def _group(self, cat: str, items: list[dict]) -> tk.Frame:
+        """One category's header and rows: built the first time it is shown, afterwards only packed or hidden."""
+        if cat not in self.sections:
+            g = self.sections[cat] = tk.Frame(self.body, bg=self.c["surface"])
+            self._section(g, cat, len(items))
+            for s in items:
+                self._row(g, s, show_cat=cat == STAR)
+        return self.sections[cat]
+
+    def _section(self, parent, cat: str, n: int) -> None:
         fg, soft = self.cat_colors(cat)
-        f = tk.Frame(self.body, bg=soft)
+        f = tk.Frame(parent, bg=soft)
         f.pack(fill="x")
         tk.Frame(f, width=self.px(6), bg=fg).pack(side="left", fill="y")
         self._label(f, cat, 12, bold=True, fg=fg, bg=soft, pady=8, padx=12).pack(side="left")
@@ -602,10 +647,10 @@ class App:
             text = text.rstrip("…")[:-1] + "…"
         return text
 
-    def _row(self, s: dict) -> None:
+    def _row(self, parent, s: dict, show_cat: bool = False) -> None:
         c = self.c
         fg, _ = self.cat_colors(s["cat"])
-        wrap = tk.Frame(self.body, bg=c["surface"], cursor="hand2")
+        wrap = tk.Frame(parent, bg=c["surface"], cursor="hand2")
         wrap.pack(fill="x")
         tk.Frame(wrap, width=self.px(6), bg=fg).pack(side="left", fill="y")
         f = tk.Frame(wrap, bg=c["surface"], cursor="hand2")
@@ -620,16 +665,27 @@ class App:
         inner = self.px(self.W - self.RAIL - 28 - 6 - 22)
         room = inner - self.tag_font.measure(s["origin"]) - self.px(40)
         room -= self.px(46) * bool(s["manual"]) + self.px(88) * (s["repo"] in self.updatable)
+        star = self._label(top, "", 13, cursor="hand2", padx=2)  # a click on it stars / unstars the skill
+        self._paint_star(star, s["name"] in self.pins[s["agent"]])
+        star.pack(side="left", padx=(0, 4))
+        self.icons.setdefault(s["name"], []).append(star)
+        extra = [star]  # labels that tint on hover together with the rest of the row
+        room -= self.px(30)
+        if show_cat:  # in the star list the colour bar alone doesn't say which category a skill came from
+            room -= self.tag_font.measure(s["cat"]) + self.px(24)
         name = self._label(top, self._fit(s["name"], room), 11, bold=True, anchor="w")
         name.pack(side="left")
+        if show_cat:
+            extra.append(self._label(top, s["cat"], 9, fg=fg))
+            extra[-1].pack(side="left", padx=8)
         if s["manual"]:
             self._label(top, "수동", 9, fg=c["warn_fg"], bg=c["warn_bg"], padx=6).pack(side="left", padx=8)
         if s["repo"] in self.updatable:
             self._label(top, "업데이트 있음", 9, bold=True, fg=c["on_accent"], bg=c["accent"], padx=6).pack(side="left", padx=2)
         note = self._label(f, s["note"], 10, fg=c["muted"], anchor="w", justify="left", wraplength=inner - self.px(28))
         note.pack(fill="x", padx=(14, 12), pady=(2, 9))
-        tk.Frame(self.body, height=1, bg=c["line"]).pack(fill="x")
-        parts = (wrap, f, top, name, tag, more, note)
+        tk.Frame(parent, height=1, bg=c["line"]).pack(fill="x")
+        parts = (wrap, f, top, name, tag, more, note, *extra)
 
         def tint(color):
             for w in parts:
@@ -642,18 +698,39 @@ class App:
             for seq in plat.RIGHT_CLICK:
                 w.bind(seq, lambda e, s=s: self.row_menu(s, e.x_root, e.y_root))
         more.bind("<Button-1>", lambda e, s=s: self.row_menu(s, e.x_root, e.y_root))
+        star.bind("<Button-1>", lambda e, s=s: self.toggle_pin(s))  # after the loop above, which gave every label "copy the name"
+        # a quick second click on the star is still a star click, not the row's double-click (which opens the detail page)
+        star.bind("<Double-Button-1>", lambda e, s=s: self.toggle_pin(s))
 
     def copy(self, name: str) -> None:
         self.root.clipboard_clear()
         self.root.clipboard_append(name)
         self.say(f"복사됨: {name}", ms=2000)
 
+    def toggle_pin(self, s: dict) -> None:
+        pins = self.pins[s["agent"]]
+        pins ^= {s["name"]}
+        mgr.save_setting("pins", {a: sorted(p) for a, p in self.pins.items()})
+        self.say(f"★ 추가됨: {s['name']}" if s["name"] in pins else f"★ 해제됨: {s['name']}")
+        live = self.icons[s["name"]] = [w for w in self.icons.get(s["name"], []) if w.winfo_exists()]
+        for w in live:  # repaint in place: rebuilding the skill's whole category just to flip one icon is slow
+            self._paint_star(w, s["name"] in pins)
+        if g := self.sections.pop(STAR, None):  # the star list itself has different rows now
+            g.destroy()
+        self.render(rebuild=False)
+
+    def _paint_star(self, label: tk.Label, starred: bool) -> None:
+        label.config(text="★" if starred else "☆", fg=self.cat_colors(STAR)[0] if starred else self.c["muted"])
+
     # ---- row actions ------------------------------------------------------------------------
     def menu_items(self, s: dict) -> list[tuple[str, object, str]]:
         """(label, action, kind) for a skill's ⋯ menu. kind: '' | 'danger' | 'note' (no action) | '-' (separator)."""
+        starred = s["name"] in self.pins[s["agent"]]
         items: list[tuple[str, object, str]] = [
             ("상세 보기", lambda: self.detail(s), ""),
             ("이름 복사", lambda: self.copy(s["name"]), ""),
+            ("★ 자주 쓰는 스킬에서 해제" if starred else "★ 자주 쓰는 스킬에 추가", lambda: self.toggle_pin(s), ""),
+            ("", None, "-"),
             ("용도 설명 수정…", lambda: self.edit_note(s), ""),
             ("SKILL.md 열어서 수정" if s["managed"] else "SKILL.md 열기 (보기)", lambda: self.edit_file(s), ""),
             ("", None, "-"),
@@ -686,8 +763,7 @@ class App:
         win = tk.Toplevel(self.root)
         win.title(title)
         win.configure(bg=self.c["bg"])
-        win.transient(self.root)
-        win.attributes("-topmost", True)
+        win.transient(self.root)  # stays above the panel without being topmost
         w, h = self.px(width), min(self.px(height), win.winfo_screenheight() - 80)
         rx, ry = self.root.winfo_x(), self.root.winfo_y()
         x = rx - w - 12 if rx > w + 24 else rx + self.root.winfo_width() + 12
@@ -807,7 +883,8 @@ class App:
         self.place()
         self.root.deiconify()
         self.root.lift()
-        self.root.attributes("-topmost", True)
+        self.root.attributes("-topmost", True)  # Windows often refuses a plain lift() from the tray; pop to the front once...
+        self.root.attributes("-topmost", False)  # ...then behave like a normal window (clicking another app puts it behind)
         self.root.focus_force()
         self.visible = True
         self.load()
