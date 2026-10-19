@@ -137,6 +137,15 @@ def main() -> None:
             shot(dlg.win, "add-new")
             dlg.close()
 
+            grilling = next(x for x in app.data["Claude Code"] if x["name"] == "grilling")
+            app.detail(grilling)
+            shot(app.detail_win.win, "detail")
+            app.detail_win.close()
+            app.row_menu(grilling, app.root.winfo_rootx() + app.px(600), app.root.winfo_rooty() + app.px(330))
+            app.popup.win.unbind("<FocusOut>")  # keep it open while the picture is taken
+            shot(app.popup.win, "menu")
+            app.close_popup()
+
             app.set_agent("Codex")
             shot(app.root, "codex")
 

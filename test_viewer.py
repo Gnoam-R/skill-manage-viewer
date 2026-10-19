@@ -41,6 +41,14 @@ def texts(w):
     return [x.cget("text") for x in walk(w) if isinstance(x, tk.Label)]
 
 
+def open_menu(app, s, x, y):
+    """Open a skill's ⋯ menu that stays open while a test inspects it. Click-away closing listens for the menu
+    losing focus, which other test windows grabbing focus would trigger at random."""
+    app.row_menu(s, x, y)
+    app.popup.win.unbind("<FocusOut>")
+    app.root.update()
+
+
 def find(app: v.App, agent: str, name: str) -> dict | None:
     return next((s for s in app.data[agent] if s["name"] == name), None)
 
@@ -117,9 +125,11 @@ class PanelTest(unittest.TestCase):
         box = self.shot(app.root, "t1_bottomleft")
         self.assertTrue(box[0] < 40 and box[3] >= bottom - 40, box)
         app.move()
+        app._last_toggle = 0.0  # tests toggle faster than a double-click
         app.events.put("toggle")
         app._pump()
         self.assertTrue(not app.visible and app.root.state() == "withdrawn")
+        app._last_toggle = 0.0  # tests toggle faster than a double-click
         app.events.put("toggle")
         app._pump()
         self.assertTrue(app.visible and app.root.state() == "normal")
@@ -135,6 +145,7 @@ class PanelTest(unittest.TestCase):
         app.root.iconify()  # minimizing sends the window to the tray instead of leaving it on the taskbar
         self.settle(lambda: not app.visible)
         self.assertEqual(app.root.state(), "withdrawn")
+        app._last_toggle = 0.0  # tests toggle faster than a double-click
         app.events.put("toggle")
         app._pump()
         self.assertTrue(app.visible and app.root.state() == "normal")
@@ -209,6 +220,15 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(app._fit(long, 10_000), long)
         self.assertTrue(app._fit("x" * 500, 1))  # never loops forever or returns nothing
 
+    def test_01c_tray_double_click_does_not_undo_itself(self):
+        app = self.app
+        app.hide()
+        app._last_toggle = 0.0
+        app.events.put("toggle")  # a double-click on the tray icon sends two clicks at once
+        app.events.put("toggle")
+        app._pump()
+        self.assertTrue(app.visible and app.root.state() == "normal")
+
     def test_03c_category_click_reuses_built_rows(self):
         app = self.app
         app.set_agent("Claude Code")
@@ -250,7 +270,7 @@ class PanelTest(unittest.TestCase):
         self.assertEqual((names[1], names[3]), (v.STAR, "전체"))  # the star entry sits above "전체", and shows at 0
         self.assertEqual(names[2], "0")
         gs = find(app, "Claude Code", "gitskill")
-        self.assertEqual(app.build_menu(gs).entrycget(1, "label"), "★ 자주 쓰는 스킬에 추가")
+        self.assertIn("★ 자주 쓰는 스킬에 추가", [label for label, _, _ in app.menu_items(gs)])
         icon = app.icons["gitskill"][0]
         self.assertEqual(icon.cget("text"), "☆")  # every row has the icon, hollow until starred
         before = dict(app.sections)
@@ -260,7 +280,7 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(mgr.load_settings()["pins"]["Claude Code"], ["gitskill"])  # saved
         self.assertEqual(v.load_pins()["Claude Code"], {"gitskill"})
         self.assertEqual(app.pins["Codex"], set())  # another agent's list is separate
-        self.assertEqual(app.build_menu(gs).entrycget(1, "label"), "★ 자주 쓰는 스킬에서 해제")
+        self.assertIn("★ 자주 쓰는 스킬에서 해제", [label for label, _, _ in app.menu_items(gs)])
         app.pick(v.STAR)
         self.assertEqual([s["name"] for s in app.shown], ["gitskill"])
         self.assertIn(gs["cat"], texts(app.body))  # the star list names each skill's own category
@@ -285,18 +305,91 @@ class PanelTest(unittest.TestCase):
 
     def test_04_menu_entries(self):
         app = self.app
-        menu = app.build_menu(find(app, "Codex", "legacy"))
-        labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) == "command"]
-        self.assertIn("삭제…", labels)
-        self.assertIn("SKILL.md 열어서 수정", labels)
-        gm = app.build_menu(find(app, "Claude Code", "gitskill"))
-        self.assertIn(
-            "이 스킬의 저장소 업데이트 확인", [gm.entrycget(i, "label") for i in range(gm.index("end") + 1) if gm.type(i) == "command"]
-        )
-        ro = next((s for s in app.data["Claude Code"] if not s["managed"]), None)
-        if ro:  # plugin / app-synced skills can't be deleted from here
-            m = app.build_menu(ro)
-            self.assertNotIn("삭제…", [m.entrycget(i, "label") for i in range(m.index("end") + 1) if m.type(i) == "command"])
+
+        def labels(s):
+            return [label for label, _, kind in app.menu_items(s) if kind != "-"]
+
+        legacy = labels(find(app, "Codex", "legacy"))
+        self.assertEqual(legacy[0], "상세 보기")
+        self.assertIn("삭제…", legacy)
+        self.assertIn("SKILL.md 열어서 수정", legacy)
+        self.assertIn("이 스킬의 저장소 업데이트 확인", labels(find(app, "Claude Code", "gitskill")))
+        ro = next(s for s in app.data["Claude Code"] if not s["managed"])
+        self.assertNotIn("삭제…", labels(ro))  # plugin / app-synced skills can't be deleted from here
+
+        # the themed popup: one at a time, runs the picked action, closes on pick and on Esc
+        open_menu(app, find(app, "Codex", "legacy"), 200, 200)
+        app.root.update()
+        first = app.popup
+        self.assertEqual([r.cget("text") for r in first.rows][0], "상세 보기")
+        self.shot(first.win, "t4_popup")
+        open_menu(app, find(app, "Codex", "legacy"), 220, 220)
+        app.root.update()  # a click only reaches a window that is on screen
+        self.assertFalse(first.win.winfo_exists())
+        next(r for r in app.popup.rows if r.cget("text") == "이름 복사").event_generate("<Button-1>")
+        app.root.update()
+        self.assertEqual(app.root.clipboard_get(), "legacy")
+        self.assertFalse(app.popup.win.winfo_exists())
+        open_menu(app, find(app, "Codex", "legacy"), 200, 200)
+        app.root.update()
+        app.popup.win.event_generate("<Escape>")
+        app.root.update()
+        self.assertFalse(app.popup.win.winfo_exists())
+
+    def test_04b_detail_page(self):
+        app = self.app
+        app.detail(find(app, "Claude Code", "gitskill"))
+        app.root.update()
+        d = app.detail_win
+        shown = texts(d.win)
+        for expected in ("gitskill", "저장소", "버전", "설치된 에이전트", "위치", "SKILL.md", "삭제…", "업데이트 확인"):
+            self.assertTrue(any(expected in t for t in shown), expected)
+        self.assertTrue(any(t.startswith("git · ") for t in shown))
+        self.assertIn("description: does a thing", d.text.get("1.0", "end"))
+        self.assertEqual(str(d.text.cget("state")), "disabled")  # a viewer, not an editor
+        with mock.patch.object(v.plat, "open_folder") as opened:
+            next(w for w in walk(d.win) if isinstance(w, tk.Label) and w.cget("text") == "폴더 열기").event_generate("<Button-1>")
+        opened.assert_called_once()
+        buttons = [w for w in walk(d.win) if isinstance(w, tk.Label) and str(w.cget("cursor")) == "hand2"]
+        for b in buttons:  # nothing in the action rows is cut off
+            self.assertLessEqual(b.winfo_reqwidth(), b.winfo_width() + 1, b.cget("text"))
+            self.assertLessEqual(b.winfo_x() + b.winfo_width(), b.master.winfo_width(), b.cget("text"))
+        self.shot(d.win, "t4b_detail")
+        ro = next(s for s in app.data["Claude Code"] if not s["managed"])
+        app.detail(ro)
+        app.root.update()
+        self.assertFalse(d.win.winfo_exists())  # one detail window at a time
+        self.assertNotIn("삭제…", texts(app.detail_win.win))
+        app.detail_win.close()
+
+    def test_04c_themed_checkbox(self):
+        app = self.app
+        holder = tk.Frame(app.root)
+        holder.pack()
+        var = tk.BooleanVar(app.root, value=False)
+        cb = app._check(holder, "옵션", var)
+        cb.pack()
+        app.root.update()
+
+        def fill():
+            return cb.box.itemcget(cb.box.find_all()[0], "fill")
+
+        self.assertEqual((fill(), len(cb.box.find_all())), (app.c["surface"], 1))
+        cb.box.event_generate("<Button-1>")
+        app.root.update()
+        self.assertTrue(var.get())
+        self.assertEqual((fill(), len(cb.box.find_all())), (app.c["accent"], 2))  # filled box + tick
+        cb.focus_force()  # keys go to the focused widget; another test's window may still hold focus
+        app.root.update()
+        cb.event_generate("<space>")  # keyboard works too
+        app.root.update()
+        self.assertFalse(var.get())
+        holder.destroy()
+        var.set(True)  # the trace went away with the widget, so nothing redraws a dead canvas
+        for pal in (v.LIGHT, v.DARK):  # a control's outline and tick need 3:1 (WCAG 1.4.11)
+            self.assertGreaterEqual(contrast(app, pal["muted"], pal["bg"]), 3)
+            self.assertGreaterEqual(contrast(app, pal["accent"], pal["bg"]), 3)
+            self.assertGreaterEqual(contrast(app, pal["on_accent"], pal["accent"]), 3)
 
     def test_05_edit_note(self):
         app = self.app
@@ -423,17 +516,26 @@ class PanelTest(unittest.TestCase):
         app = self.app
         app.add_dialog()
         dlg = app.dialog
-        menu = app.build_menu(app.shown[0])
+
+        def check(win):
+            for w in walk(win):
+                try:
+                    spec = w.cget("font")
+                except tk.TclError:
+                    continue  # frames etc. have no font option
+                f = tkfont.Font(root=app.root, font=spec)
+                self.assertEqual(f.actual("slant"), "roman", f"{w} {spec}")
+
+        app.detail(app.shown[0])
+        open_menu(app, app.shown[0], 200, 200)
+        app.root.update()
+        check(app.popup.win)
+        app.close_popup()
         for page in ("링크로 설치", "새로 만들기"):
             dlg.show(page)
-            for win in (app.root, dlg.win, menu):
-                for w in walk(win):
-                    try:
-                        spec = w.cget("font")
-                    except tk.TclError:
-                        continue  # frames etc. have no font option
-                    f = tkfont.Font(root=app.root, font=spec)
-                    self.assertEqual(f.actual("slant"), "roman", f"{w} {spec}")
+            for win in (app.root, dlg.win, app.detail_win.win):
+                check(win)
+        app.detail_win.close()
         self.assertEqual(app.f(11)[-1], "roman")
         dlg.close()
 
@@ -466,7 +568,18 @@ class PanelTest(unittest.TestCase):
                     bad += low_contrast(app, w.master, app.theme + " hover")
                     w.event_generate("<Leave>")
             for s in (app.shown[0], next(s for s in app.data["Claude Code"] if not s["managed"])):
-                bad += low_contrast(app, app.build_menu(s), app.theme + " menu")
+                open_menu(app, s, 200, 200)
+                app.root.update()
+                bad += low_contrast(app, app.popup.win, app.theme + " menu")
+                for r in app.popup.rows:
+                    r.event_generate("<Enter>")
+                    bad += low_contrast(app, r, app.theme + " menu hover")
+                    r.event_generate("<Leave>")
+                app.close_popup()
+                app.detail(s)
+                app.root.update()
+                bad += low_contrast(app, app.detail_win.win, app.theme + " detail")
+                app.detail_win.close()
             app.add_dialog()
             dlg = app.dialog
             bad += low_contrast(app, dlg.win, app.theme + " dialog, install disabled")
@@ -510,7 +623,7 @@ def low_contrast(app, top, where):
                 ("active", w.cget("activeforeground"), w.cget("activebackground"), need),
                 ("disabled", w.cget("disabledforeground"), w.cget("bg"), 3.0),
             ]
-        elif isinstance(w, (tk.Label, tk.Checkbutton, tk.Entry)):
+        elif isinstance(w, (tk.Label, tk.Checkbutton, tk.Entry, tk.Text)):
             pairs = [("fg", w.cget("fg"), w.cget("bg"), need)]
             if isinstance(w, tk.Label) and str(w.cget("state")) == "disabled":  # a disabled button
                 pairs = [("disabled", w.cget("disabledforeground"), w.cget("bg"), 3.0)]
@@ -582,6 +695,18 @@ class PlatformTest(unittest.TestCase):
     def test_font_scale_keeps_sizes_comparable(self):
         self.assertAlmostEqual(plat.FONT_SCALE, 4 / 3 if plat.MAC else 1.0)
 
+    def test_open_folder_only_reveals_and_never_launches(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(plat.subprocess, "Popen") as popen:
+            app_like = Path(t) / "evil.app"  # a skill folder name a downloaded repo could use
+            app_like.mkdir()
+            plat.open_folder(app_like)
+            cmd = popen.call_args[0][0]
+            expected = ["explorer"] if plat.WIN else ["open", "-R"] if plat.MAC else ["xdg-open"]
+            self.assertEqual(cmd[:-1], expected)
+            popen.reset_mock()
+            plat.open_folder(Path(t) / "missing")  # not a folder: nothing is started
+            popen.assert_not_called()
+
 
 class CategoryTest(unittest.TestCase):
     def test_every_skill_is_in_exactly_one_category(self):
@@ -605,6 +730,16 @@ class CategoryTest(unittest.TestCase):
         self.assertEqual(v.categorize("superpowers:requesting-code-review", ""), "리뷰·품질")
         self.assertEqual(v.categorize("zz-helper", "Review pull requests for bugs"), "리뷰·품질")  # unknown: keywords
         self.assertEqual(v.categorize("zzz", "nothing matches here"), v.OTHER)
+
+
+class TildeTest(unittest.TestCase):
+    def test_home_paths_are_shortened(self):
+        home = Path.home()
+        self.assertEqual(v.tilde(home / "x" / "y"), "~" + str(Path("/x/y")))
+        if plat.WIN:  # Windows paths ignore case
+            self.assertEqual(v.tilde(Path(str(home).upper()) / "z"), "~" + str(Path("/z")))
+        outside = Path(home.anchor) / "elsewhere-for-test"
+        self.assertEqual(v.tilde(outside), str(outside))
 
 
 class DiscoveryTest(unittest.TestCase):

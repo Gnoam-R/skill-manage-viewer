@@ -261,7 +261,7 @@ python docs/make_screenshots.py     # Windows에서 실행, docs/images/*.png를
 - 사용자에게 보이는 오류는 `ManagerError(한국어 문장)`로 올리고, 화면에서 그대로 보여 줍니다.
 - 오래 걸리는 일은 `App.bg()`로 작업 스레드에서 합니다. 위젯은 Tk 스레드에서만 만집니다.
 - 글꼴은 `App.f(크기, 굵게)`로만 지정합니다. 기울임꼴은 쓰지 않습니다(테스트가 막습니다).
-- 버튼은 `App._button()`(Label 기반)을 씁니다. `tk.Button`은 macOS에서 색이 무시됩니다.
+- 버튼은 `App._button()`(Label 기반), 체크박스는 `App._check()`(Canvas로 그림), 메뉴는 `Popup`을 씁니다. `tk.Button`·`tk.Checkbutton`·`tk.Menu`는 시스템 모양으로 그려져 테마 색이 적용되지 않습니다(macOS는 색을 아예 무시).
 - 주석은 코드만 봐서는 알 수 없는 **이유**만 한 줄로 적습니다.
 - 알려진 한계가 있는 지름길은 `# shortcut: <한계>, <언제 고칠지>` 형식으로 남깁니다.
 
