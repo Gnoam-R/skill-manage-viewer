@@ -4,3 +4,4 @@ __pycache__/
 .pyright/
 .venv/
 skill_viewer.icns
+.claude/settings.local.json
