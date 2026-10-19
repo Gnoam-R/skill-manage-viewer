@@ -2,6 +2,7 @@
 
 import json
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -54,11 +55,16 @@ class MacBundle(unittest.TestCase):
 @unittest.skipUnless(plat.WIN, "Windows shortcut")
 class WindowsShortcut(unittest.TestCase):
     def read(self, lnk: Path) -> dict:
+        copy = lnk.with_name("read-check.lnk")  # WScript.Shell can't open a Korean file name on a non-Korean Windows
+        shutil.copyfile(lnk, copy)
         script = (
-            f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');"
+            f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{copy}');"
             "$s | Select-Object TargetPath,Arguments,WorkingDirectory,IconLocation | ConvertTo-Json"
         )
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, check=True).stdout
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, check=True).stdout
+        finally:
+            copy.unlink()
         return json.loads(out)
 
     def test_start_menu_and_startup_shortcuts(self):

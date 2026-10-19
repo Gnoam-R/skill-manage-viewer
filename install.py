@@ -10,6 +10,7 @@ Search for "스킬 카탈로그" or "Skill Catalog". Nothing is copied: the entr
 
 import argparse
 import base64
+import os
 import plistlib
 import shutil
 import subprocess
@@ -29,10 +30,15 @@ def _ps_quote(text: str) -> str:
 
 
 def make_shortcut(lnk: Path, python: Path, args: str) -> None:
-    """Windows .lnk via the WScript.Shell COM object (no extra packages). The script goes in as UTF-16 so Korean survives."""
+    """Windows .lnk via the WScript.Shell COM object (no extra packages).
+
+    WScript.Shell saves through the ANSI code page, so on a non-Korean Windows the Korean file name becomes '??' and
+    saving fails. It writes an ASCII-named file, which Python then renames.
+    """
+    ascii_lnk = lnk.with_name(f"skill-catalog-{os.getpid()}.lnk")
     script = "\n".join(
         [
-            f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({_ps_quote(str(lnk))})",
+            f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({_ps_quote(str(ascii_lnk))})",
             f"$s.TargetPath = {_ps_quote(str(python))}",
             f"$s.Arguments = {_ps_quote(args)}",
             f"$s.WorkingDirectory = {_ps_quote(str(HERE))}",
@@ -48,8 +54,9 @@ def make_shortcut(lnk: Path, python: Path, args: str) -> None:
         text=True,
         creationflags=plat.NO_WINDOW,
     )
-    if r.returncode or not lnk.exists():
+    if r.returncode or not ascii_lnk.exists():
         raise RuntimeError(f"바로 가기를 만들지 못했습니다: {lnk}\n{(r.stderr or r.stdout).strip()}")
+    os.replace(ascii_lnk, lnk)
 
 
 def windowless(python: Path) -> Path:
