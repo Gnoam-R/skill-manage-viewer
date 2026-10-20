@@ -177,7 +177,7 @@ class PanelTest(unittest.TestCase):
 
     def test_01e_small_screens_keep_the_whole_window_and_dialogs_inside_the_work_area(self):
         app = self.app
-        area = (0, 0, 1024, 700)  # a small screen (CI runners): the title bar and borders must fit too
+        area = (0, 0, 1024, 700)  # a small screen (like a CI machine's): the title bar and borders must fit too
         deco = app.px(48)  # generous title bar + borders
         with mock.patch.object(plat, "work_area", return_value=area):
             app.place()
