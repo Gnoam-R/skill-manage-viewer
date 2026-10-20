@@ -8,11 +8,12 @@ settings end up in the pictures. Nothing outside the temp folder is written.
 
 import ctypes
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -96,6 +97,19 @@ def demo_world(t: Path) -> Path:
         for i in range(c)
     ]
     (log / "demo.jsonl").write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    older = [  # a few skills were last used months ago (they show up in the cleanup list), and the logs reach back five months
+        json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": (datetime.now().astimezone() - timedelta(days=days)).isoformat(),
+                "message": {"content": [{"type": "tool_use", "id": f"old-{n}", "name": "Skill", "input": {"skill": n}}]},
+            }
+        )
+        for n, days in (("docx", 95), ("executing-plans", 100), ("xlsx", 130))
+    ]
+    (log / "older.jsonl").write_text("".join(line + "\n" for line in older), encoding="utf-8")
+    five_months_ago = time.time() - 150 * 86400
+    os.utime(log / "older.jsonl", (five_months_ago, five_months_ago))
     mgr.create("meeting-notes", "Summarize meeting notes into a short report", ["Claude Code", "Codex"])
     mgr.save_skill_md(
         mgr.STORE / "skills/meeting-notes",
@@ -145,6 +159,10 @@ def main() -> None:
             mock.patch.object(mgr, "open_in_editor"),
             mock.patch.object(mgr, "AGENT_DIRS", dict(mgr.AGENT_DIRS)),
             mock.patch.object(v, "HOME", t),
+            # every demo skill was just created here, which would make all of them "new"; only the one made last stays new
+            mock.patch.object(
+                mgr, "installed_on", side_effect=lambda p: datetime.now() - timedelta(days=0 if Path(p).name == "meeting-notes" else 240)
+            ),
         ):
             repo = demo_world(t)
             app = v.App(with_tray=False, auto_update=False)
@@ -210,6 +228,13 @@ def main() -> None:
                 app._pump()
                 time.sleep(0.05)
             shot(app.root, "usage")
+            app.pick(v.IDLE)
+            deletable = [s["name"] for s in app.shown if s["managed"]]
+            app.set_checked(set(deletable[:3]))  # three ticked, as when someone is about to delete them
+            shot(app.root, "cleanup")
+            app.toggle_theme()
+            shot(app.root, "cleanup-dark")
+            app.toggle_theme()
             app.pick(None)
             app.set_agent("Claude Code")  # last, so the stars do not show up in the pictures above
             by_name = {s["name"].split(":")[-1]: s for s in app.data["Claude Code"]}
