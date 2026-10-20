@@ -352,6 +352,18 @@ def save_setting(key: str, value: object) -> None:
     (STORE / "settings.json").write_text(json.dumps({**load_settings(), key: value}, indent=1), encoding="utf-8")
 
 
+def detected_agents() -> list[str]:
+    """Agents whose config folder exists on this PC (the skills folder inside it may not yet)."""
+    return [a for a, d in AGENT_DIRS.items() if d.parent.is_dir()]
+
+
+def chosen_agents() -> list[str]:
+    """What the panel shows: the user's pick if saved, else what is installed, else everything (never an empty panel)."""
+    saved = load_settings().get("agents")
+    picked = [a for a in AGENT_DIRS if isinstance(saved, list) and a in saved]
+    return picked or detected_agents() or list(AGENT_DIRS)
+
+
 def open_in_editor(path: Path) -> None:
     plat.open_path(path)
 
