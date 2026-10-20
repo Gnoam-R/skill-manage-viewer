@@ -1,5 +1,6 @@
 """python -m unittest test_check -v   (tools/check.py: what it runs and how much it prints)"""
 
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -52,6 +53,16 @@ class CheckTest(unittest.TestCase):
         noisy = "FAIL: t\n" + "\n".join(f"line {i}" for i in range(500))
         self.assertLessEqual(len(check.failures(noisy).splitlines()), check.MAX_LINES)
         self.assertLessEqual(len(check.failures("no blocks\n" * 500).splitlines()), check.MAX_LINES)
+
+    def test_unprintable_characters_do_not_crash_the_failure_report(self):
+        console = io.TextIOWrapper(io.BytesIO(), encoding="cp949")  # a Korean Windows console
+        old, sys.stdout = sys.stdout, console
+        try:
+            check.safe_output()
+            print("broken \ufffd text")
+            console.flush()
+        finally:
+            sys.stdout = old
 
 
 if __name__ == "__main__":

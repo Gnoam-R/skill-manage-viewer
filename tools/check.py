@@ -51,7 +51,14 @@ def step(name: str, cmd: list[str], summarize=None) -> bool:
     return False
 
 
+def safe_output() -> None:
+    """A failing step can print characters the console's code page lacks (cp949 on Korean Windows): show '?', don't crash."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+
+
 def main(argv: list[str]) -> int:
+    safe_output()
     fast = "fast" in argv
     py = sys.executable
     ok = step(
