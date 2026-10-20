@@ -95,7 +95,7 @@ python skill_viewer.py --make-icns   # macOS 아이콘(skill_viewer.icns) 만들
 ```
 skill-manage-viewer/
 ├─ skill_viewer.py          화면: 창, 탭, 카테고리 목록, 스킬 줄, 메뉴, 추가 대화상자, 트레이, 색·글꼴
-├─ skill_manager.py         일: 링크 해석, git 받기, 설치·업데이트·삭제·생성, 메모·설정 저장 (Tk 없음)
+├─ skill_manager.py         일: 링크 해석, git 받기, 설치·업데이트·삭제·생성, SKILL.md 읽기·저장(`read_skill_md`/`save_skill_md`), 메모·설정 저장 (Tk 없음)
 ├─ platform_support.py      OS마다 다른 것: 폴더 링크, 파일 열기, 화면 영역, 글꼴 로드, 중복 실행 방지
 ├─ install.py               시작 메뉴 바로 가기 / macOS .app 만들기·지우기
 ├─ skill_categories.json    카테고리 정의: 이름, 기준 문장(about), 소속 스킬, 새 스킬 분류용 keywords
