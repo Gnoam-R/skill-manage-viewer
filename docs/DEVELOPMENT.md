@@ -98,6 +98,7 @@ python skill_viewer.py --make-icns   # macOS 아이콘(skill_viewer.icns) 만들
 skill-manage-viewer/
 ├─ skill_viewer.py          화면: 창, 탭, 카테고리 목록, 스킬 줄, 메뉴, 추가 대화상자, 트레이, 색·글꼴
 ├─ skill_manager.py         일: 링크 해석, git 받기, 설치·업데이트·삭제·생성, 메모·설정 저장 (Tk 없음)
+├─ skill_usage.py           Claude Code 대화 기록(.jsonl)에서 달별 스킬 호출 횟수 집계 (Tk 없음, 파일별 캐시)
 ├─ platform_support.py      OS마다 다른 것: 폴더 링크, 파일 열기, 화면 영역, 글꼴 로드, 중복 실행 방지
 ├─ install.py               시작 메뉴 바로 가기 / macOS .app 만들기·지우기
 ├─ skill_update.py          앱 자신의 자동 업데이트: 안전 조건 확인, fast-forward, 새 코드 시험 실행, 실패 시 되돌리기
@@ -190,6 +191,7 @@ python -m unittest test_viewer.PanelTest.test_03_tabs_search_rail -v   # 하나�
 | `test_viewer.py` – `CategoryTest` | 한 스킬이 두 카테고리에 들어가지 않는지, 설명 있는 스킬의 카테고리 누락, 색·기준 문장 짝 |
 | `test_viewer.py` – `DiscoveryTest` | 다른 PC 상황: 링크로 설치된 스킬, 순환 링크, 이상한 `SKILL.md`, 없는 에이전트 폴더, 깨진 플러그인 파일, 환경변수 |
 | `test_install.py` | macOS `.app` 구성과 제거 범위(모든 OS), Windows 바로 가기 내용(Windows만) |
+| `test_usage.py` | 호출 횟수 집계: 도구 호출과 `/이름`, 달별 합계, 이어받은 대화의 중복, 캐시 재사용, 깨진 입력, 플러그인 접두어 |
 | `test_update.py` | 앱 자동 업데이트: 공식 저장소·`main`·수정 없음일 때만 동작하는지, fast-forward만 하는지, 의존성 설치 조건, **실패하면 정확히 이전 커밋으로 되돌리는지**(임시 저장소 사용) |
 
 **명도 대비 테스트**(`test_14_…`)는 화면에 실제로 그려진 모든 글씨와 배경 색 조합의 대비를 계산해 WCAG AA(일반 4.5:1, 큰 글씨·비활성 3:1)를 넘는지 봅니다. 색을 바꾸면 반드시 이 테스트를 돌리세요. 실패하면 어느 글씨가 몇 대 몇인지 알려 줍니다.
