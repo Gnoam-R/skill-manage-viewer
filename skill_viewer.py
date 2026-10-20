@@ -22,12 +22,15 @@ import threading
 import time
 import tkinter as tk
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, simpledialog
 
 import platform_support as plat
 import skill_manager as mgr
+import skill_usage as usage
+import skill_update as upd
 
 HERE = Path(__file__).parent
 HOME = Path.home()
@@ -41,9 +44,11 @@ CATEGORIES = [(c["name"], c["keywords"]) for c in CATALOG]
 CATEGORY_OF = {skill: c["name"] for c in CATALOG for skill in c["skills"]}
 OTHER = "기타"
 STAR = "★ 자주 쓰는 스킬"  # rail entry listing what the user starred, separately for each agent
+USAGE = "많이 쓴 스킬"  # Claude Code only: skills ranked by how often they were called in a month
 ABOUT = {c["name"]: c["about"] for c in CATALOG} | {
     OTHER: "어느 카테고리에도 맞지 않는 스킬",
     STAR: "☆를 눌러 지정한 스킬만 모아 봅니다",
+    USAGE: "Claude Code 대화 기록에서 스킬을 부른 횟수, 많은 순",
 }
 AGENTS = list(mgr.AGENT_DIRS)
 
@@ -62,6 +67,7 @@ CAT_COLORS = {
 }
 # The star entry is not a category, so its colors stay out of CAT_COLORS (a test pairs that with skill_categories.json).
 STAR_COLORS = ("#854F0B", "#FAEEDA", "#EF9F27", "#3F2A0A")
+USAGE_COLORS = ("#0B6380", "#DCF0F7", "#67C7EB", "#123845")
 
 LIGHT = dict(bg="#F4F6F9", surface="#FFFFFF", rail="#EBEFF5", line="#CBD3DE", text="#0F172A", muted="#475569",
              accent="#1D5FD0", on_accent="#FFFFFF", soft="#E3ECFC", warn_bg="#FFF1D6", warn_fg="#7A4A00",
@@ -70,7 +76,9 @@ DARK = dict(bg="#161B22", surface="#1F2630", rail="#1A2029", line="#3A4452", tex
             accent="#7DB0FF", on_accent="#0B1220", soft="#2A3B55", warn_bg="#4A3A14", warn_fg="#FFD98A",
             danger="#FF8A80", danger_bg="#4A2220")
 FONT, FALLBACK_FONT = "Pretendard", plat.FALLBACK_FONT
-TRAY_COMMANDS = {"toggle", "add_dialog", "check_updates", "move", "load", "quit"}  # what the tray may ask the app to do
+TRAY_COMMANDS = {  # what the tray may ask the app to do
+    "toggle", "add_dialog", "check_updates", "update_app", "toggle_auto_update", "move", "load", "quit",
+}
 TRAY_NAME = "메뉴 막대" if plat.MAC else "트레이"
 DEFAULT_HINT = f"클릭: 이름 복사 · ☆: 자주 쓰는 스킬 지정 · ⋯ 또는 우클릭: 수정·삭제 · {TRAY_NAME} 아이콘으로 열기/닫기"
 
@@ -183,6 +191,11 @@ def collect(agent: str) -> list[dict]:
     return skills
 
 
+def month_label(month: str) -> str:
+    """'2026-10' -> '10월' this year, '2025.12' otherwise."""
+    return f"{int(month[5:])}월" if month[:4] == datetime.now().strftime("%Y") else f"{month[:4]}.{month[5:]}"
+
+
 def load_pins() -> dict[str, set[str]]:
     """Starred skill names per agent, from settings.json. Anything malformed counts as 'nothing starred'."""
     raw = mgr.load_settings().get("pins")
@@ -229,7 +242,9 @@ def tray_menu(put):
     return pystray.Menu(
         pystray.MenuItem("열기 / 닫기", lambda i, m: put("toggle"), default=True),
         pystray.MenuItem("스킬 추가…", lambda i, m: put("add_dialog")),
-        pystray.MenuItem("업데이트 확인", lambda i, m: put("check_updates")),
+        pystray.MenuItem("스킬 업데이트 확인", lambda i, m: put("check_updates")),
+        pystray.MenuItem("SkillDesk 업데이트 확인", lambda i, m: put("update_app")),
+        pystray.MenuItem("SkillDesk 자동 업데이트 켜기/끄기", lambda i, m: put("toggle_auto_update")),
         pystray.MenuItem("위치 전환 (우상단 ↔ 좌하단)", lambda i, m: put("move")),
         pystray.MenuItem("새로고침", lambda i, m: put("load")),
         pystray.MenuItem("종료", lambda i, m: put("quit")),
@@ -274,7 +289,7 @@ class Scroll:
 class App:
     W, H, RAIL = 900, 700, 230
 
-    def __init__(self, with_tray: bool = True):
+    def __init__(self, with_tray: bool = True, auto_update: bool = True):
         plat.dpi_aware()
         load_bundled_fonts()  # before Tk starts listing fonts
         self.root = root = tk.Tk()
@@ -296,6 +311,9 @@ class App:
         self.shown: list[dict] = []
         self.sections: dict[str, tk.Frame] = {}  # built category groups of the list; see render()
         self.pins = load_pins()  # starred skill names per agent
+        self.usage: dict[str, Counter] | None = None  # Claude Code calls per month; None until counted
+        self.usage_month = datetime.now().strftime("%Y-%m")
+        self.calls: dict[str, int] = {}  # calls of each listed skill in usage_month
         self.icons: dict[str, list[tk.Label]] = {}  # the ☆/★ labels on screen for each skill name (it can be in two groups)
         self.updatable: set[Path] = set()
         self.data: dict[str, list[dict]] = {}
@@ -308,6 +326,9 @@ class App:
         self.detail_win: DetailDialog | None = None
         self.popup: Popup | None = None
         self._last_toggle = 0.0
+        self.pending_restart: upd.Result | None = None  # an update was installed; the new code runs after a restart
+        self.restart_pill: tk.Label | None = None
+        self._failed_update = ""  # the version whose update failed, so it is reported once, not every few hours
         self._say_job = None
         self._build()
         self.query.trace_add("write", lambda *_: self.render(top=True))
@@ -321,6 +342,8 @@ class App:
             self.start_tray()
         root.after(100, self._pump)
         root.after(60_000, self._tick)
+        if auto_update:  # tests and screenshots turn this off: they must not reach out to GitHub
+            root.after(15_000, self.auto_update)
 
     # ---- widgets ----------------------------------------------------------------------------
     def px(self, n: float) -> int:
@@ -334,7 +357,7 @@ class App:
         """(text color, tint) for a category; None (= all) uses the app accent."""
         if cat is None:
             return self.c["accent"], self.c["soft"]
-        fg_l, soft_l, fg_d, soft_d = STAR_COLORS if cat == STAR else CAT_COLORS[cat]
+        fg_l, soft_l, fg_d, soft_d = STAR_COLORS if cat == STAR else USAGE_COLORS if cat == USAGE else CAT_COLORS[cat]
         return (fg_d, soft_d) if self.theme == "dark" else (fg_l, soft_l)
 
     def _label(self, parent, text="", size=11, bold=False, fg=None, bg=None, **kw):
@@ -450,7 +473,7 @@ class App:
         self._label(titles, "SkillDesk", 16, bold=True).pack(anchor="w")
         self.subtitle = self._label(titles, "", 10, fg=c["muted"])
         self.subtitle.pack(anchor="w")
-        actions = tk.Frame(header, bg=c["surface"])
+        actions = self.actions = tk.Frame(header, bg=c["surface"])
         actions.pack(side="right", padx=(0, 8))
         # created before self.footer exists; the hint handlers only touch it when the pointer is over a button
         for text, cmd, hint in (("＋ 추가", self.add_dialog, "스킬 추가 (링크로 설치 · 새로 만들기)"),
@@ -493,6 +516,7 @@ class App:
         self.list = Scroll(main, c)
         self.list.wrap.pack(fill="both", expand=True, padx=14, pady=(0, 12))
         self.canvas, self.body = self.list.canvas, self.list.body
+        self._show_restart_pill()  # a theme switch rebuilds the header; keep the pill if an update is waiting
 
     def _wheel(self, e) -> None:
         try:
@@ -553,7 +577,38 @@ class App:
 
     def pick(self, cat: str | None) -> None:
         self.cat = cat
+        if cat == USAGE:
+            self.load_usage()
         self.render(top=True, rebuild=False)
+
+    def load_usage(self) -> None:
+        """Count skill calls in Claude Code's logs on a worker thread (cached, so only new log lines are read)."""
+        work = lambda: usage.monthly_counts(mgr.CLAUDE_HOME / "projects", mgr.STORE / "usage_cache.json")  # noqa: E731
+        self.bg(work, self._usage_loaded)
+
+    def _usage_loaded(self, res) -> None:
+        if isinstance(res, Exception):
+            self.say(f"사용 기록을 읽지 못했습니다: {res}", warn=True)
+            res = {}
+        if res != self.usage:
+            self.usage = res
+            self._drop_usage_group()
+            self.render(rebuild=False)
+
+    def set_usage_month(self, month: str) -> None:
+        self.usage_month = month
+        self._drop_usage_group()
+        self.render(top=True, rebuild=False)
+
+    def _drop_usage_group(self) -> None:
+        if g := self.sections.pop(USAGE, None):  # its rows depend on the counts and the month
+            g.destroy()
+
+    def _used(self, found: list[dict]) -> list[dict]:
+        """The listed skills called in usage_month, most called first. Sets self.calls."""
+        counter = (self.usage or {}).get(self.usage_month, Counter())
+        self.calls = {s["name"]: usage.count_for(counter, s["name"]) for s in found}
+        return sorted((s for s in found if self.calls[s["name"]]), key=lambda s: (-self.calls[s["name"]], s["name"]))
 
     def render(self, top: bool = False, rebuild: bool = True) -> None:
         """rebuild=False (a category click) keeps the groups already built and only shows the picked ones."""
@@ -563,17 +618,20 @@ class App:
         found = [s for s in everything if q in " ".join((s["name"], s["note"], s["desc"], s["origin"])).lower()]
         counts = Counter(s["cat"] for s in found)
         starred = [s for s in found if s["name"] in self.pins[agent]]
-        if self.cat not in counts and self.cat != STAR:  # the picked category vanished (search or refresh)
-            self.cat = None
-        self.shown = starred if self.cat == STAR else [s for s in found if self.cat in (None, s["cat"])]
+        claude = agent == "Claude Code"  # only Claude Code's logs are read
+        used = self._used(found) if claude else []
+        if self.cat not in counts and self.cat not in (STAR, USAGE) or (self.cat == USAGE and not claude):
+            self.cat = None  # the picked category vanished (search, refresh or another agent)
+        self.shown = starred if self.cat == STAR else used if self.cat == USAGE else [
+            s for s in found if self.cat in (None, s["cat"])]
         self._restyle_tabs(agent, {a: f"{a}  {len(self.data.get(a, []))}" for a in AGENTS})
         self.subtitle.config(text=f"{agent}에서 사용할 수 있는 스킬")
-        self._draw_rail(counts, len(found), len(starred))
+        self._draw_rail(counts, len(found), len(starred), len(used) if claude else None)
         self.count.config(text=f"{len(self.shown)}개 스킬" + (f" · '{q}' 검색 결과" if q else ""))
         if rebuild or not self.shown:  # data, agent, search or theme changed (or only the empty note is up): groups are stale
             self.list.clear()
             self.sections, self.icons = {}, {}
-        groups = [(STAR, self.shown)] if self.cat == STAR else [
+        groups = [(STAR, self.shown)] if self.cat == STAR else [(USAGE, self.shown)] if self.cat == USAGE else [
             (cat, [s for s in self.shown if s["cat"] == cat]) for cat in [n for n, _ in CATEGORIES] + [OTHER]
         ]
         wanted = [self._group(cat, items) for cat, items in groups if items]
@@ -596,17 +654,22 @@ class App:
                    f"{agent}에 설치된 스킬이 없습니다.\n\n{mgr.AGENT_DIRS[agent]}\n\n위의 ＋ 추가에서 설치할 수 있습니다.")
             if self.cat == STAR and everything and not q:
                 msg = "아직 지정한 스킬이 없습니다\n\n스킬 이름 앞의 ☆를 눌러\n자주 쓰는 스킬로 지정하세요."
+            if self.cat == USAGE and everything:
+                msg = ("Claude Code 대화 기록에서 스킬 호출을 세는 중입니다…" if self.usage is None else
+                       f"{month_label(self.usage_month)}에 기록된 스킬 호출이 없습니다")
+                self._month_chips(self.body)
             self._label(self.body, msg, 11, fg=c["muted"], pady=40, padx=20, justify="center").pack(fill="x")
         if top:
             self.canvas.yview_moveto(0)
 
-    def _draw_rail(self, counts: Counter, total: int, starred: int) -> None:
+    def _draw_rail(self, counts: Counter, total: int, starred: int, used: int | None = None) -> None:
         c = self.c
         for w in self.rail.winfo_children():
             w.destroy()
         self._label(self.rail, "카테고리", 10, fg=c["muted"], bg=c["rail"], anchor="w", padx=16, pady=10).pack(fill="x")
         # the star entry is always there, even at 0, so the feature can be found
-        for cat, n in [(STAR, starred), (None, total)] + [(k, counts[k]) for k in [n for n, _ in CATEGORIES] + [OTHER] if counts[k]]:
+        top = [(STAR, starred)] + ([(USAGE, used)] if used is not None else []) + [(None, total)]
+        for cat, n in top + [(k, counts[k]) for k in [n for n, _ in CATEGORIES] + [OTHER] if counts[k]]:
             fg, soft = self.cat_colors(cat)
             on = cat == self.cat
             row = tk.Frame(self.rail, bg=soft if on else c["rail"], cursor="hand2")
@@ -628,8 +691,10 @@ class App:
         if cat not in self.sections:
             g = self.sections[cat] = tk.Frame(self.body, bg=self.c["surface"])
             self._section(g, cat, len(items))
+            if cat == USAGE:
+                self._month_chips(g)
             for s in items:
-                self._row(g, s, show_cat=cat == STAR)
+                self._row(g, s, show_cat=cat in (STAR, USAGE), calls=self.calls.get(s["name"]) if cat == USAGE else None)
         return self.sections[cat]
 
     def _section(self, parent, cat: str, n: int) -> None:
@@ -641,13 +706,26 @@ class App:
         self._label(f, f"{n}개", 10, bold=True, fg=fg, bg=soft, padx=10).pack(side="right")
         self._label(f, ABOUT[cat], 10, fg=self.c["text"], bg=soft).pack(side="left")  # what belongs here
 
+    def _month_chips(self, parent) -> None:
+        """Months that have calls (newest first, up to six) plus the whole period; the picked one is filled."""
+        c = self.c
+        months = sorted({m for m in (self.usage or {}) if m != usage.ALL} | {self.usage_month}, reverse=True)[:6]
+        bar = tk.Frame(parent, bg=c["surface"])
+        bar.pack(fill="x", padx=12, pady=8)
+        for m in [*months, usage.ALL]:
+            on = m == self.usage_month
+            chip = self._label(bar, "전체 기간" if m == usage.ALL else month_label(m), 10, bold=on, cursor="hand2", padx=10, pady=3,
+                               fg=c["on_accent"] if on else c["text"], bg=c["accent"] if on else c["rail"])
+            chip.pack(side="left", padx=(0, 6))
+            chip.bind("<Button-1>", lambda e, m=m: self.set_usage_month(m))
+
     def _fit(self, text: str, room: int) -> str:
         """Shorten text with an ellipsis so it fits in `room` pixels at the row-name font (full name stays in the copy menu)."""
         while len(text) > 1 and self.name_font.measure(text) > room:
             text = text.rstrip("…")[:-1] + "…"
         return text
 
-    def _row(self, parent, s: dict, show_cat: bool = False) -> None:
+    def _row(self, parent, s: dict, show_cat: bool = False, calls: int | None = None) -> None:
         c = self.c
         fg, _ = self.cat_colors(s["cat"])
         wrap = tk.Frame(parent, bg=c["surface"], cursor="hand2")
@@ -661,10 +739,12 @@ class App:
         more.pack(side="right")
         tag = self._label(top, s["origin"], 9, fg=c["muted"])
         tag.pack(side="right")
+        if calls:
+            self._label(top, f"{calls}회", 10, bold=True, fg=c["on_accent"], bg=c["accent"], padx=7).pack(side="right", padx=(0, 10))
         # room left for the name once the tag, the ⋯ button and any badges are placed (badge widths are estimates)
         inner = self.px(self.W - self.RAIL - 28 - 6 - 22)
         room = inner - self.tag_font.measure(s["origin"]) - self.px(40)
-        room -= self.px(46) * bool(s["manual"]) + self.px(88) * (s["repo"] in self.updatable)
+        room -= self.px(46) * bool(s["manual"]) + self.px(88) * (s["repo"] in self.updatable) + self.px(60) * bool(calls)
         star = self._label(top, "", 13, cursor="hand2", padx=2)  # a click on it stars / unstars the skill
         self._paint_star(star, s["name"] in self.pins[s["agent"]])
         star.pack(side="left", padx=(0, 4))
@@ -910,6 +990,60 @@ class App:
             return
         self.hide() if self.visible else self.show()
         self._last_toggle = time.monotonic()
+
+    # ---- updating SkillDesk itself ------------------------------------------------------------
+    def auto_update(self, manual: bool = False) -> None:
+        """Check GitHub for a newer SkillDesk and install it (see skill_update.py for when that is allowed).
+        Runs again every 6 hours by itself; manual=True (the tray item) also reports "already up to date" and why not."""
+        if not manual:
+            self.root.after(6 * 3600 * 1000, self.auto_update)
+            if not mgr.load_settings().get("auto_update", True):
+                return
+        if self.pending_restart:  # the new code is already on disk; asking GitHub again would only repeat it
+            if manual:
+                self.say("이미 새 버전을 받았습니다. 위쪽의 '다시 시작'을 누르세요", ms=6000)
+            return
+        if manual:
+            self.say("SkillDesk 업데이트 확인 중…", ms=60_000)
+        self.bg(lambda: upd.apply(), lambda res: self._update_done(res, manual))
+
+    def update_app(self) -> None:
+        self.auto_update(manual=True)
+
+    def toggle_auto_update(self) -> None:
+        on = not mgr.load_settings().get("auto_update", True)
+        mgr.save_setting("auto_update", on)
+        self.say(f"SkillDesk 자동 업데이트: {'켬' if on else '끔'}")
+
+    def _update_done(self, res, manual: bool = False) -> None:
+        if isinstance(res, Exception):
+            res = upd.Result("failed", str(res))
+        if res.status == "updated":
+            self.pending_restart = res
+            self._show_restart_pill()
+            if self.visible:
+                self.say(f"SkillDesk {res.old} → {res.new} 업데이트됨. 위쪽의 '다시 시작'을 누르면 적용됩니다", ms=10_000)
+            else:
+                self.restart()  # nobody is looking at the window, so switch to the new version right away
+        elif res.status == "failed" and (manual or res.new != self._failed_update):
+            self._failed_update = res.new
+            self.say(res.detail, warn=True, ms=10_000)
+        elif manual and res.status in ("up-to-date", "skipped"):
+            self.say("SkillDesk는 최신 버전입니다" if res.status == "up-to-date" else res.detail, ms=8000)
+
+    def _show_restart_pill(self) -> None:
+        if not self.pending_restart or (self.restart_pill and self.restart_pill.winfo_exists()):
+            return
+        c = self.c
+        pill = self.restart_pill = self._label(self.actions, "새 버전 · 다시 시작", 10, bold=True, fg=c["on_accent"], bg=c["accent"],
+                                               padx=10, pady=3, cursor="hand2")
+        pill.pack(side="left", padx=(0, 8), before=self.actions.winfo_children()[0])
+        pill.bind("<Button-1>", lambda e: self.restart())
+
+    def restart(self) -> None:
+        """Start the updated app and close this one."""
+        upd.restart(hidden=not self.visible)
+        self.quit()
 
     def quit(self) -> None:
         if self.tray:

@@ -147,3 +147,11 @@ def already_running(name: str = "skilldesk") -> bool:
         return True
     _lock_file = f
     return False
+
+
+def release_lock() -> None:
+    """Let go of the single-instance lock now (before starting the updated copy of the app)."""
+    global _lock_file
+    if _lock_file:
+        _lock_file.close()  # closing the file drops the OS lock
+        _lock_file = None

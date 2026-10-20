@@ -17,6 +17,8 @@ SkillDesk를 고치거나 기능을 더하려는 사람을 위한 문서입니�
 - [브랜치·커밋·PR 규칙](#브랜치커밋pr-규칙)
 - [알려진 한계](#알려진-한계)
 
+> 매일 쓰는 규칙(토큰을 아끼는 작업 방식, 커밋·PR 규칙, 코드 지도)은 저장소 루트의 [`AGENTS.md`](../AGENTS.md)에 짧게 정리돼 있습니다. AI 에이전트도 그 파일을 읽습니다.
+
 ## 한눈에 보기
 
 | 항목 | 내용 |
@@ -72,7 +74,7 @@ python -m pip install -r requirements.txt ruff pyright
 ```bash
 python -c "import tkinter, pystray, PIL; print('Tk', tkinter.TkVersion)"   # Tk 8.6 이 나와야 합니다
 python skill_viewer.py --check                                           # 이 PC의 스킬 탐색 결과
-python -m unittest test_manager test_viewer test_install                 # 모두 OK
+python -m unittest test_manager test_viewer test_install test_update     # 모두 OK
 ```
 
 ## 실행과 디버깅
@@ -96,8 +98,10 @@ python skill_viewer.py --make-icns   # macOS 아이콘(skill_viewer.icns) 만들
 skill-manage-viewer/
 ├─ skill_viewer.py          화면: 창, 탭, 카테고리 목록, 스킬 줄, 메뉴, 추가 대화상자, 트레이, 색·글꼴
 ├─ skill_manager.py         일: 링크 해석, git 받기, 설치·업데이트·삭제·생성, SKILL.md 읽기·저장(`read_skill_md`/`save_skill_md`), 메모·설정 저장 (Tk 없음)
+├─ skill_usage.py           Claude Code 대화 기록(.jsonl)에서 달별 스킬 호출 횟수 집계 (Tk 없음, 파일별 캐시)
 ├─ platform_support.py      OS마다 다른 것: 폴더 링크, 파일 열기, 화면 영역, 글꼴 로드, 중복 실행 방지
 ├─ install.py               시작 메뉴 바로 가기 / macOS .app 만들기·지우기
+├─ skill_update.py          앱 자신의 자동 업데이트: 안전 조건 확인, fast-forward, 새 코드 시험 실행, 실패 시 되돌리기
 ├─ skill_categories.json    카테고리 정의: 이름, 기준 문장(about), 소속 스킬, 새 스킬 분류용 keywords
 ├─ skill_notes.json         스킬별 한국어 한 줄 용도 (이름 → 설명)
 ├─ skill_viewer.ico         앱 아이콘 (Windows)
@@ -169,6 +173,8 @@ skill-manage-viewer/
 ## 테스트
 
 ```bash
+python tools/check.py                                        # 린트·타입·모든 테스트, 실패한 것만 출력 (푸시 전)
+python tools/check.py fast                                   # 창이 뜨지 않는 테스트만, 약 30초 (수정하는 동안)
 python -m unittest test_manager test_viewer test_install -v
 python -m unittest test_viewer.PanelTest.test_03_tabs_search_rail -v   # 하나만
 ```
@@ -185,6 +191,8 @@ python -m unittest test_viewer.PanelTest.test_03_tabs_search_rail -v   # 하나�
 | `test_viewer.py` – `CategoryTest` | 한 스킬이 두 카테고리에 들어가지 않는지, 설명 있는 스킬의 카테고리 누락, 색·기준 문장 짝 |
 | `test_viewer.py` – `DiscoveryTest` | 다른 PC 상황: 링크로 설치된 스킬, 순환 링크, 이상한 `SKILL.md`, 없는 에이전트 폴더, 깨진 플러그인 파일, 환경변수 |
 | `test_install.py` | macOS `.app` 구성과 제거 범위(모든 OS), Windows 바로 가기 내용(Windows만) |
+| `test_usage.py` | 호출 횟수 집계: 도구 호출과 `/이름`, 달별 합계, 이어받은 대화의 중복, 캐시 재사용, 깨진 입력, 플러그인 접두어 |
+| `test_update.py` | 앱 자동 업데이트: 공식 저장소·`main`·수정 없음일 때만 동작하는지, fast-forward만 하는지, 의존성 설치 조건, **실패하면 정확히 이전 커밋으로 되돌리는지**(임시 저장소 사용) |
 
 **명도 대비 테스트**(`test_14_…`)는 화면에 실제로 그려진 모든 글씨와 배경 색 조합의 대비를 계산해 WCAG AA(일반 4.5:1, 큰 글씨·비활성 3:1)를 넘는지 봅니다. 색을 바꾸면 반드시 이 테스트를 돌리세요. 실패하면 어느 글씨가 몇 대 몇인지 알려 줍니다.
 
@@ -205,8 +213,7 @@ python -m pyright skill_manager.py skill_viewer.py platform_support.py install.p
 
 1. Python 3.12 설치
 2. `pip install -r requirements.txt ruff`
-3. `ruff check`
-4. `python -m unittest test_manager test_viewer test_install -v`
+3. `python tools/check.py` (ruff + 모든 `test_*.py`. 통과한 단계는 한 줄, 실패하면 실패 부분만 출력해 로그가 짧습니다)
 
 - macOS 장비가 없어도 macOS 동작을 이 CI로 확인합니다. 실제로 macOS CI가 "심볼릭 링크로 설치한 스킬이 안 보이는" 버그를 잡았습니다.
 - CI에서는 화면 캡처 권한이 없어 스크린샷 저장을 건너뛰고, macOS 메뉴 막대 아이콘은 띄우지 않습니다.
@@ -255,6 +262,7 @@ python docs/make_screenshots.py     # Windows에서 실행, docs/images/*.png를
 
 ## 코드 규칙
 
+- **내 PC의 정보를 커밋하지 않습니다.** 이 프로그램은 각자의 PC에 설치된 스킬과 플러그인을 읽는 도구라서, 저장소에는 내 홈 폴더 경로, 계정 이름, 내 PC나 회사에만 있는 스킬 이름이 들어가면 안 됩니다. `skill_notes.json`·`skill_categories.json`에는 누구나 설치할 수 있는 공개 스킬만 넣고, 내 스킬의 설명은 앱의 `⋯ → 용도 설명 수정`(내 PC의 `~/.skill-manager/notes.json`에만 저장됩니다)으로 바꾸세요. `test_privacy.py`가 이를 검사합니다.
 - **Tk는 `skill_viewer.py`에만** 둡니다. `skill_manager.py`는 화면 없이 테스트할 수 있어야 합니다.
 - **OS 분기는 `platform_support.py`에만** 둡니다.
 - **아무것도 영구 삭제하지 않습니다.** 사용자 폴더를 지울 때는 `mgr.trash()`로 옮깁니다. 지우는 것은 우리가 방금 만든 임시물(실패한 clone 등)뿐입니다.
