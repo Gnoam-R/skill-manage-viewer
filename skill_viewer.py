@@ -1,6 +1,6 @@
 """SkillDesk: lists the skills each agent (Claude Code / Codex / Antigravity) can use, grouped by
 category (category rail on the left, skills on the right), and installs / updates / edits / deletes them.
-Lives in a corner window that is opened and closed from a tray icon.
+Lives in a window centered on the screen that is opened and closed from a tray icon.
 
   pythonw skill_viewer.py            start (window visible; minimize or close hides it to the tray)
   pythonw skill_viewer.py --hidden   start in the tray only
@@ -76,9 +76,7 @@ DARK = dict(bg="#161B22", surface="#1F2630", rail="#1A2029", line="#3A4452", tex
             accent="#7DB0FF", on_accent="#0B1220", soft="#2A3B55", warn_bg="#4A3A14", warn_fg="#FFD98A",
             danger="#FF8A80", danger_bg="#4A2220")
 FONT, FALLBACK_FONT = "Pretendard", plat.FALLBACK_FONT
-TRAY_COMMANDS = {  # what the tray may ask the app to do
-    "toggle", "add_dialog", "check_updates", "update_app", "toggle_auto_update", "move", "load", "quit",
-}
+TRAY_COMMANDS = {"toggle", "add_dialog", "check_updates", "load", "quit"}  # what the tray may ask the app to do
 TRAY_NAME = "메뉴 막대" if plat.MAC else "트레이"
 DEFAULT_HINT = f"클릭: 이름 복사 · ☆: 자주 쓰는 스킬 지정 · ⋯ 또는 우클릭: 수정·삭제 · {TRAY_NAME} 아이콘으로 열기/닫기"
 
@@ -242,10 +240,7 @@ def tray_menu(put):
     return pystray.Menu(
         pystray.MenuItem("열기 / 닫기", lambda i, m: put("toggle"), default=True),
         pystray.MenuItem("스킬 추가…", lambda i, m: put("add_dialog")),
-        pystray.MenuItem("스킬 업데이트 확인", lambda i, m: put("check_updates")),
-        pystray.MenuItem("SkillDesk 업데이트 확인", lambda i, m: put("update_app")),
-        pystray.MenuItem("SkillDesk 자동 업데이트 켜기/끄기", lambda i, m: put("toggle_auto_update")),
-        pystray.MenuItem("위치 전환 (우상단 ↔ 좌하단)", lambda i, m: put("move")),
+        pystray.MenuItem("업데이트 확인", lambda i, m: put("check_updates")),
         pystray.MenuItem("새로고침", lambda i, m: put("load")),
         pystray.MenuItem("종료", lambda i, m: put("quit")),
     )
@@ -305,7 +300,6 @@ class App:
         self.theme = mgr.load_settings().get("theme", "light")  # light unless the user switched
         self.c = DARK if self.theme == "dark" else LIGHT
         root.configure(bg=self.c["bg"])
-        self.corner = "tr"
         self.visible = True
         self.cat: str | None = None  # category picked in the rail; None = all
         self.shown: list[dict] = []
@@ -482,7 +476,6 @@ class App:
                                 ("⟳", self.load, "목록 새로고침"),
                                 ("⚙", self.settings_dialog, "설정 (표시할 에이전트)"),
                                 ("라이트" if self.theme == "dark" else "다크", self.toggle_theme, "밝은/어두운 화면 전환"),
-                                ("⇄", self.move, "창 위치 전환 (우상단 ↔ 좌하단)"),
                                 ("–", self.hide, "트레이로 숨기기")):
             self._icon_button(actions, text, cmd, hint).pack(side="left")
 
@@ -844,15 +837,17 @@ class App:
         self.detail_win = DetailDialog(self, s, page, edit)
 
     def _side_window(self, title: str, width: int, height: int) -> tk.Toplevel:
-        """A themed window beside the panel (not over it), for dialogs."""
+        """A themed window centered over the panel (kept on screen), for dialogs."""
         win = tk.Toplevel(self.root)
         win.title(title)
         win.configure(bg=self.c["bg"])
         win.transient(self.root)  # stays above the panel without being topmost
-        w, h = self.px(width), min(self.px(height), win.winfo_screenheight() - 80)
-        rx, ry = self.root.winfo_x(), self.root.winfo_y()
-        x = rx - w - 12 if rx > w + 24 else rx + self.root.winfo_width() + 12
-        win.geometry(f"{w}x{h}+{max(x, 0)}+{ry}")
+        left, top, right, bottom = plat.work_area(self.root)
+        frame = self.px(48)
+        w, h = min(self.px(width), right - left - 24), min(self.px(height), bottom - top - frame - 24)
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        win.geometry(f"{w}x{h}+{max(left, min(x, right - w))}+{max(top, min(y, bottom - h - frame))}")
         self._dark_titlebar(win)
         return win
 
@@ -977,19 +972,14 @@ class App:
         self.load()
 
     def place(self) -> None:
+        """Size the window and put it in the middle of the usable screen (what a normal app does the first time)."""
         left, top, right, bottom = plat.work_area(self.root)
-        w, h = min(self.px(self.W), right - left - 24), min(self.px(self.H), bottom - top - 24)
-        x = right - w - 12 if self.corner == "tr" else left + 12
-        y = top + 12 if self.corner == "tr" else bottom - h - 12
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
-
-    def move(self) -> None:
-        self.corner = "bl" if self.corner == "tr" else "tr"
-        self.place()
+        frame = self.px(48)  # title bar + borders: Tk sizes the inside, but positions the outside
+        w, h = min(self.px(self.W), right - left - 24), min(self.px(self.H), bottom - top - frame - 24)
+        self.root.geometry(f"{w}x{h}+{left + (right - left - w) // 2}+{top + (bottom - top - h - frame) // 2}")
 
     def show(self) -> None:
-        self.place()
-        self.root.deiconify()
+        self.root.deiconify()  # it comes back where the user left it; only the first start centers it
         self.root.lift()
         self.root.attributes("-topmost", True)  # Windows often refuses a plain lift() from the tray; pop to the front once...
         self.root.attributes("-topmost", False)  # ...then behave like a normal window (clicking another app puts it behind)
