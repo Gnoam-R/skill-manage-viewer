@@ -88,7 +88,7 @@ python skill_viewer.py --make-icon   # skill_viewer.ico 다시 만들기
 python skill_viewer.py --make-icns   # macOS 아이콘(skill_viewer.icns) 만들기
 ```
 
-- 앱은 **한 번에 하나만** 뜹니다(`platform_support.already_running`, 임시 폴더의 `skill-catalog.lock` 파일 잠금). 고친 코드를 확인하려면 **트레이 메뉴 → 종료**로 이전 것을 끄고 다시 실행하세요.
+- 앱은 **한 번에 하나만** 뜹니다(`platform_support.already_running`, 임시 폴더의 `skill-catalog.lock` 파일 잠금). 다시 실행하면 새 창 대신 떠 있는 앱에 "창을 보여 달라"는 쪽지(임시 폴더의 `skilldesk.show`, `platform_support.ask_running_copy_to_show`)를 남기고 끝납니다. 떠 있는 앱은 0.1초마다 쪽지를 확인해(`App._pump`) 창을 띄웁니다. 그래서 고친 코드를 확인하려면 **트레이 메뉴 → 종료**로 이전 것을 끄고 다시 실행하세요(이전 앱이 새 코드가 아니면 쪽지를 읽지 못합니다).
 - 시작에 4~8초가 걸리는 것은 정상입니다. 세 에이전트의 스킬 폴더를 읽고 git 스킬의 커밋을 조회하기 때문입니다.
 - 실제 `~/.claude` 등을 건드리지 않고 화면만 보고 싶으면 `python docs/make_screenshots.py`를 참고하세요. 임시 폴더에 예시 스킬을 만들어 앱을 띄웁니다.
 
@@ -187,7 +187,7 @@ python -m unittest test_viewer.PanelTest.test_03_tabs_search_rail -v   # 하나�
 |---|---|
 | `test_manager.py` | 링크 해석(허용·거부 형식), 로컬 git 저장소로 설치·업데이트·재연결·삭제, 이름 충돌과 교체, 휴지통 이동, 새 스킬 생성, 메모 저장, 자동 업데이트 스크립트 목록 정리 |
 | `test_viewer.py` – `PanelTest` | 트레이·최소화·화면 가운데 배치, 출처 표시, 탭·검색·카테고리 선택, 메뉴, 용도 수정, 추가 대화상자(생성·링크 설치·충돌·교체), 업데이트 확인·적용, 삭제, 테마 저장, 기울임 없는 글꼴, Pretendard 사용, **모든 글씨의 명도 대비**(라이트·다크, 마우스 올림·선택·비활성 포함) |
-| `test_viewer.py` – `PlatformTest` | 폴더 링크 만들기·지우기, 중복 실행 방지, 우클릭 이벤트, 트레이 명령 허용 목록 |
+| `test_viewer.py` – `PlatformTest` | 폴더 링크 만들기·지우기, 중복 실행 방지, 다시 실행할 때 남기는 "창을 보여 달라" 쪽지(한 번만 읽힘·오래된 쪽지 무시), 우클릭 이벤트, 트레이 명령 허용 목록 |
 | `test_viewer.py` – `CategoryTest` | 한 스킬이 두 카테고리에 들어가지 않는지, 설명 있는 스킬의 카테고리 누락, 색·기준 문장 짝 |
 | `test_viewer.py` – `DiscoveryTest` | 다른 PC 상황: 링크로 설치된 스킬, 순환 링크, 이상한 `SKILL.md`, 없는 에이전트 폴더, 깨진 플러그인 파일, 환경변수 |
 | `test_install.py` | macOS `.app` 구성과 제거 범위(모든 OS), Windows 바로 가기 내용(Windows만) |
