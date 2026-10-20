@@ -391,6 +391,7 @@ Windows 11은 작업 표시줄 오른쪽 `^`를 눌러 숨은 아이콘을 보�
 ## 개발에 참여하기
 
 개발 환경 준비, 구조, 테스트, 코드 규칙은 **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** 에 정리돼 있습니다.
+작업 규칙 요약(토큰을 아끼는 작업 방식, 커밋·PR 규칙, 코드 지도)은 **[AGENTS.md](AGENTS.md)** 에 있습니다. PR을 열면 `.github/pull_request_template.md` 양식이 자동으로 채워집니다.
 
 ## 라이선스
 

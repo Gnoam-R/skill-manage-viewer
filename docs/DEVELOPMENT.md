@@ -17,6 +17,8 @@ SkillDesk를 고치거나 기능을 더하려는 사람을 위한 문서입니�
 - [브랜치·커밋·PR 규칙](#브랜치커밋pr-규칙)
 - [알려진 한계](#알려진-한계)
 
+> 매일 쓰는 규칙(토큰을 아끼는 작업 방식, 커밋·PR 규칙, 코드 지도)은 저장소 루트의 [`AGENTS.md`](../AGENTS.md)에 짧게 정리돼 있습니다. AI 에이전트도 그 파일을 읽습니다.
+
 ## 한눈에 보기
 
 | 항목 | 내용 |
@@ -170,7 +172,9 @@ skill-manage-viewer/
 ## 테스트
 
 ```bash
-python -m unittest test_manager test_viewer test_install test_update -v
+python tools/check.py                                        # 린트·타입·모든 테스트, 실패한 것만 출력 (푸시 전)
+python tools/check.py fast                                   # 창이 뜨지 않는 테스트만, 약 30초 (수정하는 동안)
+python -m unittest test_manager test_viewer test_install -v
 python -m unittest test_viewer.PanelTest.test_03_tabs_search_rail -v   # 하나만
 ```
 
@@ -207,8 +211,7 @@ python -m pyright skill_manager.py skill_viewer.py platform_support.py install.p
 
 1. Python 3.12 설치
 2. `pip install -r requirements.txt ruff`
-3. `ruff check`
-4. `python -m unittest test_manager test_viewer test_install test_update -v`
+3. `python tools/check.py` (ruff + 모든 `test_*.py`. 통과한 단계는 한 줄, 실패하면 실패 부분만 출력해 로그가 짧습니다)
 
 - macOS 장비가 없어도 macOS 동작을 이 CI로 확인합니다. 실제로 macOS CI가 "심볼릭 링크로 설치한 스킬이 안 보이는" 버그를 잡았습니다.
 - CI에서는 화면 캡처 권한이 없어 스크린샷 저장을 건너뛰고, macOS 메뉴 막대 아이콘은 띄우지 않습니다.
