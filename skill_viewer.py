@@ -45,10 +45,12 @@ CATEGORY_OF = {skill: c["name"] for c in CATALOG for skill in c["skills"]}
 OTHER = "기타"
 STAR = "★ 자주 쓰는 스킬"  # rail entry listing what the user starred, separately for each agent
 USAGE = "많이 쓴 스킬"  # Claude Code only: skills ranked by how often they were called in a month
+IDLE = "정리 후보"  # Claude Code only, last in the rail: skills not called for two months, to tick and delete
 ABOUT = {c["name"]: c["about"] for c in CATALOG} | {
     OTHER: "어느 카테고리에도 맞지 않는 스킬",
     STAR: "☆를 눌러 지정한 스킬만 모아 봅니다",
     USAGE: "Claude Code 대화 기록에서 스킬을 부른 횟수, 많은 순",
+    IDLE: "최근 2개월 동안 한 번도 쓰지 않은 스킬, 오래 안 쓴 순",
 }
 AGENTS = list(mgr.AGENT_DIRS)
 
@@ -68,6 +70,7 @@ CAT_COLORS = {
 # The star entry is not a category, so its colors stay out of CAT_COLORS (a test pairs that with skill_categories.json).
 STAR_COLORS = ("#854F0B", "#FAEEDA", "#EF9F27", "#3F2A0A")
 USAGE_COLORS = ("#0B6380", "#DCF0F7", "#67C7EB", "#123845")
+IDLE_COLORS = ("#475569", "#E8ECF1", "#B6C2D2", "#2C3542")  # slate: neutral, nothing to be alarmed about until the user ticks something
 
 LIGHT = dict(bg="#F4F6F9", surface="#FFFFFF", rail="#EBEFF5", line="#CBD3DE", text="#0F172A", muted="#475569",
              accent="#1D5FD0", on_accent="#FFFFFF", soft="#E3ECFC", warn_bg="#FFF1D6", warn_fg="#7A4A00",
@@ -194,6 +197,13 @@ def month_label(month: str) -> str:
     return f"{int(month[5:])}월" if month[:4] == datetime.now().strftime("%Y") else f"{month[:4]}.{month[5:]}"
 
 
+def idle_label(last: str | None, now: datetime) -> str:
+    """'기록 없음' or '3개월 전 사용' for a skill whose latest call was in the month `last` ('YYYY-MM')."""
+    if last is None:
+        return "기록 없음"
+    return f"{(now.year - int(last[:4])) * 12 + now.month - int(last[5:])}개월 전 사용"
+
+
 def load_pins() -> dict[str, set[str]]:
     """Starred skill names per agent, from settings.json. Anything malformed counts as 'nothing starred'."""
     raw = mgr.load_settings().get("pins")
@@ -282,7 +292,7 @@ class Scroll:
 
 
 class App:
-    W, H, RAIL = 900, 700, 230
+    W, H, RAIL = 900, 784, 230  # tall enough at 100% scaling for the whole rail: three fixed entries, ten categories, and 정리 후보 last
 
     def __init__(self, with_tray: bool = True, auto_update: bool = True):
         plat.dpi_aware()
@@ -308,6 +318,14 @@ class App:
         self.usage: dict[str, Counter] | None = None  # Claude Code calls per month; None until counted
         self.usage_month = datetime.now().strftime("%Y-%m")
         self.calls: dict[str, int] = {}  # calls of each listed skill in usage_month
+        self.log_start: datetime | None = None  # oldest Claude Code log file: how far back the idle list can see
+        self.idle_last: dict[str, str | None] = {}  # idle skill -> month of its last call (None: never in the logs)
+        self._idle_key: tuple | None = None  # what _idle() last worked from, and its answer
+        self._idle_items: list[dict] = []
+        self.hide_new = tk.BooleanVar(value=True)  # idle list: leave out skills installed inside the window
+        self.hide_new.trace_add("write", lambda *_: self._idle_filter_changed())
+        self.checked: set[str] = set()  # skills ticked in the idle list
+        self.checks: dict[str, list[tk.Label]] = {}  # the ☐/☑ labels on screen for each skill name
         self.icons: dict[str, list[tk.Label]] = {}  # the ☆/★ labels on screen for each skill name (it can be in two groups)
         self.updatable: set[Path] = set()
         self.data: dict[str, list[dict]] = {}
@@ -352,7 +370,8 @@ class App:
         """(text color, tint) for a category; None (= all) uses the app accent."""
         if cat is None:
             return self.c["accent"], self.c["soft"]
-        fg_l, soft_l, fg_d, soft_d = STAR_COLORS if cat == STAR else USAGE_COLORS if cat == USAGE else CAT_COLORS[cat]
+        special = {STAR: STAR_COLORS, USAGE: USAGE_COLORS, IDLE: IDLE_COLORS}
+        fg_l, soft_l, fg_d, soft_d = special.get(cat) or CAT_COLORS[cat]
         return (fg_d, soft_d) if self.theme == "dark" else (fg_l, soft_l)
 
     def _label(self, parent, text="", size=11, bold=False, fg=None, bg=None, **kw):
@@ -510,6 +529,7 @@ class App:
 
         self.list = Scroll(main, c)
         self.list.wrap.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        self.idle_bar = tk.Frame(main, bg=c["surface"], highlightthickness=1, highlightbackground=c["line"])  # packed by _draw_idle_bar
         self.canvas, self.body = self.list.canvas, self.list.body
         self._show_restart_pill()  # a theme switch rebuilds the header; keep the pill if an update is waiting
 
@@ -572,21 +592,22 @@ class App:
 
     def pick(self, cat: str | None) -> None:
         self.cat = cat
-        if cat == USAGE:
+        if cat in (USAGE, IDLE):
             self.load_usage()
         self.render(top=True, rebuild=False)
 
     def load_usage(self) -> None:
         """Count skill calls in Claude Code's logs on a worker thread (cached, so only new log lines are read)."""
-        work = lambda: usage.monthly_counts(mgr.CLAUDE_HOME / "projects", mgr.STORE / "usage_cache.json")  # noqa: E731
+        projects = mgr.CLAUDE_HOME / "projects"
+        work = lambda: usage.scan_logs(projects, mgr.STORE / "usage_cache.json")  # noqa: E731
         self.bg(work, self._usage_loaded)
 
     def _usage_loaded(self, res) -> None:
         if isinstance(res, Exception):
             self.say(f"사용 기록을 읽지 못했습니다: {res}", warn=True)
-            res = {}
-        if res != self.usage:
-            self.usage = res
+            res = ({}, None)
+        if res != (self.usage, self.log_start):
+            self.usage, self.log_start = res
             self._drop_usage_group()
             self.render(rebuild=False)
 
@@ -596,14 +617,37 @@ class App:
         self.render(top=True, rebuild=False)
 
     def _drop_usage_group(self) -> None:
-        if g := self.sections.pop(USAGE, None):  # its rows depend on the counts and the month
-            g.destroy()
+        for cat in (USAGE, IDLE):
+            if g := self.sections.pop(cat, None):  # its rows depend on the counts (and the month)
+                g.destroy()
+        self.checks = {}  # the tick boxes lived in the idle group
+
+    def _idle_filter_changed(self) -> None:
+        self._drop_usage_group()
+        self.render(rebuild=False)
 
     def _used(self, found: list[dict]) -> list[dict]:
         """The listed skills called in usage_month, most called first. Sets self.calls."""
         counter = (self.usage or {}).get(self.usage_month, Counter())
         self.calls = {s["name"]: usage.count_for(counter, s["name"]) for s in found}
         return sorted((s for s in found if self.calls[s["name"]]), key=lambda s: (-self.calls[s["name"]], s["name"]))
+
+    def _idle(self, skills: list[dict]) -> list[dict]:
+        """The given skills not called in the last two months, longest unused first. Sets self.idle_last.
+        Empty until the logs are counted, and when they hold no skill call at all."""
+        now = datetime.now()
+        key = (self.usage, tuple(skills), self.hide_new.get(), now.strftime("%Y-%m"))
+        if key != self._idle_key:  # counting is the slow part (every category click renders); the answer only changes with these
+            window = usage.recent_months(now)[-1]
+            last = self.idle_last = usage.idle_since(self.usage or {}, [s["name"] for s in skills], now)
+
+            def too_new(s: dict) -> bool:  # installed inside the window: it has not had the whole window to be used
+                born = mgr.installed_on(s["path"])
+                return born is not None and born.strftime("%Y-%m") >= window
+            items = [s for s in skills if s["name"] in last and not (self.hide_new.get() and too_new(s))]
+            self._idle_key = key
+            self._idle_items = sorted(items, key=lambda s: (last[s["name"]] is not None, last[s["name"]] or "", s["name"]))
+        return self._idle_items
 
     def render(self, top: bool = False, rebuild: bool = True) -> None:
         """rebuild=False (a category click) keeps the groups already built and only shows the picked ones."""
@@ -615,18 +659,24 @@ class App:
         starred = [s for s in found if s["name"] in self.pins[agent]]
         claude = agent == "Claude Code"  # only Claude Code's logs are read
         used = self._used(found) if claude else []
-        if self.cat not in counts and self.cat not in (STAR, USAGE) or (self.cat == USAGE and not claude):
+        idle_all = self._idle(everything) if claude else []  # not narrowed by the search: what is ticked must outlive a search
+        shown_names = {s["name"] for s in found}
+        idle = [s for s in idle_all if s["name"] in shown_names]
+        if self.cat not in counts and self.cat not in (STAR, USAGE, IDLE) or (self.cat in (USAGE, IDLE) and not claude):
             self.cat = None  # the picked category vanished (search, refresh or another agent)
-        self.shown = starred if self.cat == STAR else used if self.cat == USAGE else [
+        self.shown = starred if self.cat == STAR else used if self.cat == USAGE else idle if self.cat == IDLE else [
             s for s in found if self.cat in (None, s["cat"])]
+        self.checked &= {s["name"] for s in idle_all if s["managed"]}  # ticked, but gone or no longer idle: not ticked any more
         self._restyle_tabs(agent, {a: f"{a}  {len(self.data.get(a, []))}" for a in self.agents})
         self.subtitle.config(text=f"{agent}에서 사용할 수 있는 스킬")
-        self._draw_rail(counts, len(found), len(starred), len(used) if claude else None)
+        idle_count = None if not claude else "–" if self.usage is None else len(idle)  # "–": the logs are counted on the first visit
+        self._draw_rail(counts, len(found), len(starred), len(used) if claude else None, idle_count)
         self.count.config(text=f"{len(self.shown)}개 스킬" + (f" · '{q}' 검색 결과" if q else ""))
         if rebuild or not self.shown:  # data, agent, search or theme changed (or only the empty note is up): groups are stale
             self.list.clear()
-            self.sections, self.icons = {}, {}
+            self.sections, self.icons, self.checks = {}, {}, {}
         groups = [(STAR, self.shown)] if self.cat == STAR else [(USAGE, self.shown)] if self.cat == USAGE else [
+            (IDLE, self.shown)] if self.cat == IDLE else [
             (cat, [s for s in self.shown if s["cat"] == cat]) for cat in [n for n, _ in CATEGORIES] + [OTHER]
         ]
         wanted = [self._group(cat, items) for cat, items in groups if items]
@@ -653,18 +703,29 @@ class App:
                 msg = ("Claude Code 대화 기록에서 스킬 호출을 세는 중입니다…" if self.usage is None else
                        f"{month_label(self.usage_month)}에 기록된 스킬 호출이 없습니다")
                 self._month_chips(self.body)
+            if self.cat == IDLE and everything:
+                if self.usage is None:
+                    msg = "Claude Code 대화 기록에서 스킬 호출을 세는 중입니다…"
+                elif not any(m != usage.ALL for m in self.usage):
+                    msg = ("대화 기록에서 스킬 호출을 하나도 찾지 못했습니다\n\n기록이 없으면 모든 스킬이 쓰지 않은 것처럼 보이므로\n"
+                           "정리 후보를 만들지 않았습니다.")
+                else:
+                    msg = "정리할 스킬이 없습니다\n\n최근 2개월 안에 모든 스킬을 한 번 이상 썼습니다."
+                    self._idle_head(self.body)
             self._label(self.body, msg, 11, fg=c["muted"], pady=40, padx=20, justify="center").pack(fill="x")
+        self._draw_idle_bar()
         if top:
             self.canvas.yview_moveto(0)
 
-    def _draw_rail(self, counts: Counter, total: int, starred: int, used: int | None = None) -> None:
+    def _draw_rail(self, counts: Counter, total: int, starred: int, used: int | None = None, idle: int | str | None = None) -> None:
         c = self.c
         for w in self.rail.winfo_children():
             w.destroy()
         self._label(self.rail, "카테고리", 10, fg=c["muted"], bg=c["rail"], anchor="w", padx=16, pady=10).pack(fill="x")
         # the star entry is always there, even at 0, so the feature can be found
         top = [(STAR, starred)] + ([(USAGE, used)] if used is not None else []) + [(None, total)]
-        for cat, n in top + [(k, counts[k]) for k in [n for n, _ in CATEGORIES] + [OTHER] if counts[k]]:
+        bottom = [(IDLE, idle)] if idle is not None else []  # the cleanup entry is the last one, after every category
+        for cat, n in top + [(k, counts[k]) for k in [n for n, _ in CATEGORIES] + [OTHER] if counts[k]] + bottom:
             fg, soft = self.cat_colors(cat)
             on = cat == self.cat
             row = tk.Frame(self.rail, bg=soft if on else c["rail"], cursor="hand2")
@@ -688,8 +749,12 @@ class App:
             self._section(g, cat, len(items))
             if cat == USAGE:
                 self._month_chips(g)
+            if cat == IDLE:
+                self._idle_head(g)
+            now = datetime.now()
             for s in items:
-                self._row(g, s, show_cat=cat in (STAR, USAGE), calls=self.calls.get(s["name"]) if cat == USAGE else None)
+                self._row(g, s, show_cat=cat in (STAR, USAGE, IDLE), calls=self.calls.get(s["name"]) if cat == USAGE else None,
+                          idle=idle_label(self.idle_last.get(s["name"]), now) if cat == IDLE else None)
         return self.sections[cat]
 
     def _section(self, parent, cat: str, n: int) -> None:
@@ -714,13 +779,30 @@ class App:
             chip.pack(side="left", padx=(0, 6))
             chip.bind("<Button-1>", lambda e, m=m: self.set_usage_month(m))
 
+    def _idle_head(self, parent) -> None:
+        """Top of the idle list: the switch for new skills, select-all, and a note when the logs are shorter than the window."""
+        c = self.c
+        bar = tk.Frame(parent, bg=c["surface"])
+        bar.pack(fill="x", padx=12, pady=(8, 2))
+        self._check(bar, "설치 2개월 미만 제외", self.hide_new, bg=c["surface"]).pack(side="left")
+        for text, command in (("선택 해제", self.clear_checks), ("전체 선택", self.select_all)):
+            link = self._label(bar, text, 10, fg=c["accent"], cursor="hand2", padx=8)
+            link.pack(side="right")
+            link.bind("<Button-1>", lambda e, command=command: command())
+        start = self.log_start
+        if start and start.strftime("%Y-%m-%d") > usage.recent_months(datetime.now())[-1] + "-01":
+            note = f"대화 기록이 {start:%Y-%m-%d}부터만 남아 있어 기준(최근 2개월)보다 짧습니다. 그 전에 쓴 스킬도 후보로 보일 수 있습니다."
+            self._label(parent, note, 10, fg=c["warn_fg"], bg=c["warn_bg"], anchor="w", justify="left", padx=14, pady=6,
+                        wraplength=self.px(self.W - self.RAIL - 28 - 6 - 22) - self.px(28)).pack(fill="x", pady=(4, 0))
+
     def _fit(self, text: str, room: int) -> str:
         """Shorten text with an ellipsis so it fits in `room` pixels at the row-name font (full name stays in the copy menu)."""
         while len(text) > 1 and self.name_font.measure(text) > room:
             text = text.rstrip("…")[:-1] + "…"
         return text
 
-    def _row(self, parent, s: dict, show_cat: bool = False, calls: int | None = None) -> None:
+    def _row(self, parent, s: dict, show_cat: bool = False, calls: int | None = None, idle: str | None = None) -> None:
+        """idle: the idle list's 'last used' text; its rows also get a tick box (when the skill may be deleted here)."""
         c = self.c
         fg, _ = self.cat_colors(s["cat"])
         wrap = tk.Frame(parent, bg=c["surface"], cursor="hand2")
@@ -736,15 +818,25 @@ class App:
         tag.pack(side="right")
         if calls:
             self._label(top, f"{calls}회", 10, bold=True, fg=c["on_accent"], bg=c["accent"], padx=7).pack(side="right", padx=(0, 10))
+        if idle:
+            self._label(top, idle, 10, fg=c["muted"], bg=c["rail"], padx=7).pack(side="right", padx=(0, 10))
         # room left for the name once the tag, the ⋯ button and any badges are placed (badge widths are estimates)
         inner = self.px(self.W - self.RAIL - 28 - 6 - 22)
         room = inner - self.tag_font.measure(s["origin"]) - self.px(40)
         room -= self.px(46) * bool(s["manual"]) + self.px(88) * (s["repo"] in self.updatable) + self.px(60) * bool(calls)
+        room -= self.px(86) * bool(idle)
+        box = None
+        if idle and s["managed"]:  # ☐/☑ to pick it for deletion; a skill some other app provides can't be deleted here
+            box = self._label(top, "", 13, cursor="hand2", padx=2)
+            self._paint_check(box, s["name"] in self.checked)
+            box.pack(side="left", padx=(0, 4))
+            self.checks.setdefault(s["name"], []).append(box)
+            room -= self.px(30)
         star = self._label(top, "", 13, cursor="hand2", padx=2)  # a click on it stars / unstars the skill
         self._paint_star(star, s["name"] in self.pins[s["agent"]])
         star.pack(side="left", padx=(0, 4))
         self.icons.setdefault(s["name"], []).append(star)
-        extra = [star]  # labels that tint on hover together with the rest of the row
+        extra = [star, *([box] if box else [])]  # labels that tint on hover together with the rest of the row
         room -= self.px(30)
         if show_cat:  # in the star list the colour bar alone doesn't say which category a skill came from
             room -= self.tag_font.measure(s["cat"]) + self.px(24)
@@ -757,7 +849,8 @@ class App:
             self._label(top, "수동", 9, fg=c["warn_fg"], bg=c["warn_bg"], padx=6).pack(side="left", padx=8)
         if s["repo"] in self.updatable:
             self._label(top, "업데이트 있음", 9, bold=True, fg=c["on_accent"], bg=c["accent"], padx=6).pack(side="left", padx=2)
-        note = self._label(f, s["note"], 10, fg=c["muted"], anchor="w", justify="left", wraplength=inner - self.px(28))
+        text = f"{s['origin']} 제공 스킬이라 여기서 삭제할 수 없습니다" if idle and not s["managed"] else s["note"]
+        note = self._label(f, text, 10, fg=c["muted"], anchor="w", justify="left", wraplength=inner - self.px(28))
         note.pack(fill="x", padx=(14, 12), pady=(2, 9))
         tk.Frame(parent, height=1, bg=c["line"]).pack(fill="x")
         parts = (wrap, f, top, name, tag, more, note, *extra)
@@ -776,6 +869,9 @@ class App:
         star.bind("<Button-1>", lambda e, s=s: self.toggle_pin(s))  # after the loop above, which gave every label "copy the name"
         # a quick second click on the star is still a star click, not the row's double-click (which opens the detail page)
         star.bind("<Double-Button-1>", lambda e, s=s: self.toggle_pin(s))
+        if box:  # same for the tick box
+            for seq in ("<Button-1>", "<Double-Button-1>"):
+                box.bind(seq, lambda e, n=s["name"]: self.toggle_check(n))
 
     def copy(self, name: str) -> None:
         self.root.clipboard_clear()
@@ -796,6 +892,72 @@ class App:
 
     def _paint_star(self, label: tk.Label, starred: bool) -> None:
         label.config(text="★" if starred else "☆", fg=self.cat_colors(STAR)[0] if starred else self.c["muted"])
+
+    # ---- idle list: tick, then delete in one go ---------------------------------------------
+    def _paint_check(self, label: tk.Label, on: bool) -> None:
+        label.config(text="☑" if on else "☐", fg=self.c["accent"] if on else self.c["muted"])
+
+    def set_checked(self, names: set[str]) -> None:
+        self.checked = names
+        for name, labels in self.checks.items():  # repaint in place, like the stars: rebuilding the list for a tick is slow
+            for w in labels:
+                if w.winfo_exists():
+                    self._paint_check(w, name in names)
+        self._draw_idle_bar()
+
+    def toggle_check(self, name: str) -> None:
+        self.set_checked(self.checked ^ {name})
+
+    def select_all(self) -> None:
+        self.set_checked({s["name"] for s in self.shown if s["managed"]})
+
+    def clear_checks(self) -> None:
+        self.set_checked(set())
+
+    def _draw_idle_bar(self) -> None:
+        """The strip under the idle list: what is ticked and the delete button. Not shown in any other view."""
+        c, bar = self.c, self.idle_bar
+        for w in bar.winfo_children():
+            w.destroy()
+        if self.cat != IDLE or not self.shown:
+            bar.pack_forget()
+            return
+        n = len(self.checked)
+        hidden = n - sum(s["name"] in self.checked for s in self.shown)  # ticked, but a search keeps them off the screen
+        bar.pack(side="bottom", fill="x", padx=14, pady=(0, 10), before=self.list.wrap)
+        # ticking only marks; nothing changes on disk until the delete button is confirmed
+        text = f"{n}개 선택됨" + (f" (검색에 가려진 {hidden}개 포함)" if hidden else "") + " · 아직 삭제하지 않았습니다"
+        self._label(bar, text if n else "지울 스킬의 ☐를 눌러 체크하세요", 10, fg=c["text"] if n else c["muted"],
+                    padx=12, pady=9).pack(side="left")
+        self._button(bar, "선택한 스킬 삭제…", self.delete_checked, danger=True).pack(side="right", padx=8, pady=5)
+
+    def delete_checked(self) -> None:
+        """Delete the ticked skills of the idle list: a link is unlinked, a real folder goes to the trash (see mgr.remove)."""
+        skills = [s for s in self._idle_items if s["name"] in self.checked and s["managed"]]  # all ticked, even if a search hides them
+        if not skills:
+            self.say("먼저 지울 스킬에 체크하세요", warn=True)
+            return
+        how = {s["name"]: "연결만 해제" if mgr.is_link(s["path"]) else "휴지통으로 이동" for s in skills}
+        lines = "\n".join(f"· {s['name']}  ({how[s['name']]})" for s in skills[:12])
+        # a long list stays short on screen, yet every name is there: nothing is deleted that the question did not name
+        more = f"\n그 밖에 {len(skills) - 12}개: " + ", ".join(s["name"] for s in skills[12:]) if len(skills) > 12 else ""
+        body = ("연결만 해제하는 스킬은 원본과 다른 에이전트의 같은 스킬이 그대로 남습니다.\n"
+                f"휴지통으로 옮기는 스킬은 {mgr.STORE / 'trash'} 에서 복구할 수 있습니다.")
+        question = f"Claude Code에서 {len(skills)}개를 삭제할까요?\n\n{lines}{more}\n\n{body}"
+        if not messagebox.askyesno("스킬 삭제", question, parent=self.root):
+            return
+        done, failed = [], []
+        for s in skills:
+            try:
+                mgr.remove(s["agent"], s["path"].name)
+                done.append(s["name"])
+            except mgr.ManagerError as e:
+                failed.append(f"{s['name']}: {e}")
+        self.checked -= set(done)
+        if failed:
+            messagebox.showerror("삭제하지 못한 스킬이 있습니다", "\n".join(failed), parent=self.root)
+        self.say(f"삭제됨: {len(done)}개" + (f" · 실패 {len(failed)}개" if failed else ""), warn=bool(failed))
+        self.load()
 
     # ---- row actions ------------------------------------------------------------------------
     def menu_items(self, s: dict) -> list[tuple[str, object, str]]:

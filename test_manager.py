@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 import platform_support as plat
@@ -48,6 +49,17 @@ class ParseLink(unittest.TestCase):
         ):
             with self.assertRaises(m.ManagerError, msg=bad):
                 m.parse_link(bad)
+
+
+class InstalledOn(unittest.TestCase):
+    def test_a_new_folder_is_dated_now_and_a_missing_one_has_no_date(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t) / "skill"
+            d.mkdir()
+            got = m.installed_on(d)
+            self.assertIsNotNone(got)
+            self.assertLess(abs((datetime.now() - got).total_seconds()), 300)
+            self.assertIsNone(m.installed_on(Path(t) / "missing"))
 
 
 class Lifecycle(unittest.TestCase):

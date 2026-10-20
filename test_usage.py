@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 import skill_usage as u
@@ -110,6 +111,39 @@ class UsageTest(unittest.TestCase):
         self.assertEqual(u.count_for(c, "superpowers:brainstorming"), 1)
         self.assertEqual(u.count_for(c, "tdd"), 4)
         self.assertEqual(u.count_for(c, "nothing"), 0)
+
+    def test_idle_skills_are_those_not_called_this_month_or_last(self):
+        counts = {
+            "2026-07": Counter({"old-fav": 3}),
+            "2026-09": Counter({"anthropic-skills:pdf": 1}),
+            "2026-10": Counter({"tdd": 2}),
+            u.ALL: Counter({"old-fav": 3, "anthropic-skills:pdf": 1, "tdd": 2}),
+        }
+        got = u.idle_since(counts, ["tdd", "pdf", "old-fav", "never"], datetime(2026, 10, 20))
+        self.assertEqual(got, {"old-fav": "2026-07", "never": None})  # last month's call of pdf counts, under its plugin name too
+        self.assertEqual(u.last_used(counts, "pdf"), "2026-09")
+        # a month later the September call has left the window
+        self.assertEqual(u.idle_since(counts, ["pdf", "tdd"], datetime(2026, 11, 1)), {"pdf": "2026-09"})
+
+    def test_logs_without_any_skill_call_give_no_candidates(self):
+        self.assertEqual(u.idle_since({}, ["tdd"], datetime(2026, 10, 20)), {})  # every skill would look idle
+
+    def test_recent_months_cross_the_new_year(self):
+        self.assertEqual(u.recent_months(datetime(2027, 1, 15)), ["2027-01", "2026-12"])
+        self.assertEqual(u.recent_months(datetime(2026, 10, 1), 3), ["2026-10", "2026-09", "2026-08"])
+
+    def test_scan_logs_also_says_how_far_back_the_logs_reach(self):
+        self.assertEqual(u.scan_logs(self.projects, self.cache), ({}, None))  # the folder exists but holds no log
+        self.assertEqual(u.scan_logs(self.t / "nope", self.cache), ({}, None))
+        a = self.write("p1/a.jsonl", [tool_line("t1", "tdd", "2026-10-02T03:00:00Z")])
+        b = self.write("p2/b.jsonl", ["{}"])
+        old = datetime(2026, 8, 15, 12).timestamp()
+        os.utime(a, (old, old))
+        os.utime(b, (old + 40 * 86400, old + 40 * 86400))
+        counts, start = u.scan_logs(self.projects, self.cache)
+        self.assertEqual((counts["2026-10"]["tdd"], start), (1, datetime(2026, 8, 15, 12)))
+        self.assertEqual(u.scan_logs(self.projects, self.cache)[1], start)  # the same from the cache
+        self.assertEqual(u.monthly_counts(self.projects, self.cache), counts)  # the old entry point is unchanged
 
 
 if __name__ == "__main__":

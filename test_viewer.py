@@ -12,6 +12,7 @@ import tempfile
 import time
 import tkinter as tk
 import unittest
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import font as tkfont
@@ -428,6 +429,147 @@ class PanelTest(unittest.TestCase):
         self.assertNotIn(v.USAGE, texts(app.rail))
         self.assertIsNone(app.cat)
         app.set_agent("Claude Code")
+
+    def test_03i_idle_skills_are_ticked_then_deleted_together(self):
+        app, claude = self.app, self.tmp / "claude"
+        app.set_agent("Claude Code")
+        app.query.set("")
+        write_skill(claude / "stale-a")  # the logs never mention these four
+        write_skill(claude / "stale-b")
+        write_skill(claude / "stale-new")
+        write_skill(self.tmp / "src/stale-link")
+        mgr.install([self.tmp / "src/stale-link"], ["Claude Code"])
+        old = datetime.now() - timedelta(days=200)
+        born = lambda p: datetime.now() if Path(p).name == "stale-new" else old  # noqa: E731
+        try:
+            with mock.patch.object(mgr, "installed_on", side_effect=born):
+                app.load()
+                app.usage = None  # as at start-up: the logs are read on the first visit
+                app.render()
+                self.assertEqual(texts(app.rail)[-2:], [v.IDLE, "–"])  # last in the rail, after every category; not counted yet
+                app.pick(v.IDLE)
+                self.settle(lambda: app.usage is not None)
+                app.root.update()
+                # tdd and gitskill were called this month; stale-new was installed this month, so it is left out (for now)
+                self.assertEqual([s["name"] for s in app.shown], ["grilling", "stale-a", "stale-b", "stale-link"])
+                self.assertEqual(texts(app.rail)[-2:], [v.IDLE, "4"])
+                self.assertEqual(app.idle_bar.winfo_manager(), "pack")
+                body = texts(app.body)
+                self.assertEqual(body.count("기록 없음"), 4)
+                self.assertIn("앱 동기화 제공 스킬이라 여기서 삭제할 수 없습니다", body)  # view-only: no tick box, only the reason
+                self.assertEqual(set(app.checks), {"stale-a", "stale-b", "stale-link"})
+                self.assertTrue(any(t.startswith("대화 기록이") and "부터만 남아" in t for t in body))  # the test logs are minutes old
+                app.log_start = datetime(2020, 1, 1)  # logs that reach back past the window: no note
+                app._drop_usage_group()
+                app.render(rebuild=False)
+                self.assertFalse(any("부터만 남아" in t for t in texts(app.body)))
+                self.shot(app.root, "t3i_idle")
+                bad = low_contrast(app, app.root, "idle light")
+
+                with mock.patch.object(v.messagebox, "askyesno") as ask:  # nothing ticked: no question, a hint instead
+                    app.delete_checked()
+                    ask.assert_not_called()
+                self.assertEqual(app.footer.cget("text"), "먼저 지울 스킬에 체크하세요")
+                app.toggle_check("stale-a")
+                app.toggle_check("stale-link")
+                self.assertEqual(app.checks["stale-a"][0].cget("text"), "☑")
+                self.assertIn("2개 선택됨 · 아직 삭제하지 않았습니다", texts(app.idle_bar))
+                self.assertTrue((claude / "stale-a").exists())  # ticking changes nothing on disk
+                app.hide_new.set(False)  # include what was installed inside the window
+                self.assertEqual([s["name"] for s in app.shown][-1], "stale-new")
+                self.assertEqual(app.checked, {"stale-a", "stale-link"})  # the ticks survive the redraw
+                app.hide_new.set(True)
+                app.query.set("stale-link")  # a search must not untick what it hides
+                self.assertEqual([s["name"] for s in app.shown], ["stale-link"])
+                self.assertEqual(app.checked, {"stale-a", "stale-link"})
+                self.assertIn("2개 선택됨 (검색에 가려진 1개 포함) · 아직 삭제하지 않았습니다", texts(app.idle_bar))
+                app.query.set("")
+                self.assertEqual(app.checks["stale-a"][-1].cget("text"), "☑")  # and it is ticked again when it comes back
+                app.select_all()
+                self.assertEqual(app.checked, {"stale-a", "stale-b", "stale-link"})  # not the view-only one
+                app.clear_checks()
+                self.assertEqual(texts(app.idle_bar)[0], "지울 스킬의 ☐를 눌러 체크하세요")
+                app.toggle_theme()
+                app.pick(v.IDLE)
+                self.settle(lambda: app.shown)
+                bad += low_contrast(app, app.root, "idle dark")
+                app.toggle_theme()
+                self.assertEqual(bad, [])
+
+                app.toggle_check("stale-b")
+                with mock.patch.object(v.messagebox, "askyesno", return_value=False):  # declined: everything stays
+                    app.delete_checked()
+                self.assertTrue((claude / "stale-b").exists())
+                self.assertEqual(app.checked, {"stale-b"})
+                app.toggle_check("stale-b")
+                app.toggle_check("stale-a")
+                app.toggle_check("stale-link")
+                with mock.patch.object(v.messagebox, "askyesno", return_value=True) as ask:
+                    app.delete_checked()
+                question = ask.call_args.args[1]
+                self.assertIn("2개를 삭제할까요", question)
+                self.assertIn("stale-a  (휴지통으로 이동)", question)  # a real folder goes to the trash
+                self.assertIn("stale-link  (연결만 해제)", question)  # a link is only unlinked
+                self.assertFalse((claude / "stale-a").exists() or mgr.is_link(claude / "stale-link"))
+                self.assertTrue((self.tmp / "src/stale-link/SKILL.md").exists())  # the original stays
+                self.assertTrue(any("stale-a" in p.name for p in (mgr.STORE / "trash").iterdir()))
+                self.assertEqual(app.checked, set())
+                self.assertEqual([s["name"] for s in app.shown], ["grilling", "stale-b"])
+                self.assertEqual(texts(app.rail)[-2:], [v.IDLE, "2"])
+                self.assertIn("삭제됨: 2개", app.footer.cget("text"))
+
+                saved = app.usage  # without any skill call in the logs every skill looks idle: no list, and the reason
+                app.usage = {}
+                app.render()
+                self.assertIn("하나도 찾지 못했습니다", "".join(texts(app.body)))
+                self.assertEqual(app.shown, [])
+                app.usage = {self.this_month: Counter({s["name"]: 1 for s in app.data["Claude Code"]})}
+                app.render()
+                self.assertIn("정리할 스킬이 없습니다", "".join(texts(app.body)))
+                self.assertIn("설치 2개월 미만 제외", "".join(texts(app.body)))  # the switch stays so the new ones can be looked at
+                app.usage = saved
+                app.render()
+                app.pick(None)
+                self.assertEqual(app.idle_bar.winfo_manager(), "")  # the bar belongs to the idle list only
+                app.set_agent("Codex")  # only Claude Code's logs are read
+                self.assertNotIn(v.IDLE, texts(app.rail))
+        finally:
+            for name in ("stale-a", "stale-b", "stale-new", "stale-link"):
+                if (claude / name).exists() or mgr.is_link(claude / name):
+                    mgr.remove("Claude Code", name)
+            app.set_agent("Claude Code")
+            app.load()
+
+    def test_03j_the_delete_question_names_every_ticked_skill(self):
+        app, claude = self.app, self.tmp / "claude"
+        names = [f"bulk-{i:02d}" for i in range(14)]  # more than the dialog lists one per line
+        for n in names:
+            write_skill(claude / n)
+        try:
+            with mock.patch.object(mgr, "installed_on", return_value=datetime.now() - timedelta(days=200)):
+                app.set_agent("Claude Code")
+                app.query.set("")
+                app.load()
+                app.pick(v.IDLE)
+                self.settle(lambda: app.usage is not None)
+                app.root.update()
+                app.select_all()
+                app.query.set("bulk-13")  # the search hides 13 of the 14 ticked skills; they are still going to be deleted
+                self.assertEqual(len(app.checked), 14)
+                with mock.patch.object(v.messagebox, "askyesno", return_value=False) as ask:
+                    app.delete_checked()
+                question = ask.call_args.args[1]
+                self.assertIn("14개를 삭제할까요", question)
+                self.assertEqual([n for n in names if n not in question], [])  # every name is in the question
+                self.assertTrue(all((claude / n).exists() for n in names))  # declined: nothing was deleted
+        finally:
+            app.query.set("")
+            for n in names:
+                if (claude / n).exists():
+                    mgr.remove("Claude Code", n)
+            app.set_agent("Claude Code")
+            app.load()
+
     def test_03h_app_updates_itself_and_restarts_without_surprises(self):
         app = self.app
         done = upd.Result("updated", "", "aaa1111", "bbb2222", ["Feat: 새 기능"])
