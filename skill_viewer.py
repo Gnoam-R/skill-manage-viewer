@@ -292,7 +292,7 @@ class Scroll:
 
 
 class App:
-    W, H, RAIL = 900, 700, 230
+    W, H, RAIL = 900, 784, 230  # tall enough at 100% scaling for the whole rail: three fixed entries, ten categories, and 정리 후보 last
 
     def __init__(self, with_tray: bool = True, auto_update: bool = True):
         plat.dpi_aware()
