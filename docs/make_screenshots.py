@@ -97,6 +97,14 @@ def demo_world(t: Path) -> Path:
     ]
     (log / "demo.jsonl").write_text("".join(line + "\n" for line in lines), encoding="utf-8")
     mgr.create("meeting-notes", "Summarize meeting notes into a short report", ["Claude Code", "Codex"])
+    mgr.save_skill_md(
+        mgr.STORE / "skills/meeting-notes",
+        "Summarize meeting notes into a short report",
+        False,
+        "# meeting-notes\n\n회의 메모를 받으면 **한 쪽짜리 보고서**로 정리합니다.\n\n## 순서\n\n"
+        "- 참석자와 날짜를 먼저 적는다\n- 결정 사항과 할 일을 나눠 `표`로 정리한다\n- 끝에 다음 회의 안건을 붙인다\n\n"
+        "## 출력 형식\n\n```\n결정: ...\n할 일: 담당자 / 기한\n```\n",
+    )
     mgr.set_note("meeting-notes", "회의록을 요약 보고서로 정리 (직접 만든 스킬 예시)")
     return repo
 
@@ -174,6 +182,14 @@ def main() -> None:
             app.detail(grilling)
             shot(app.detail_win.win, "detail")
             app.detail_win.close()
+            mine = next(x for x in app.data["Claude Code"] if x["name"] == "meeting-notes")  # hand-made: the only editable kind
+            app.detail(mine, page="SKILL.md")
+            shot(app.detail_win.win, "skill-md-view")
+            app.detail_win.close()
+            app.detail(mine, page="SKILL.md", edit=True)
+            shot(app.detail_win.win, "skill-md-edit")
+            app.detail_win.editing = False  # nothing was changed; close without asking
+            app.detail_win.close()
             app.row_menu(grilling, app.root.winfo_rootx() + app.px(600), app.root.winfo_rooty() + app.px(330))
             app.popup.win.unbind("<FocusOut>")  # keep it open while the picture is taken
             shot(app.popup.win, "menu")
@@ -181,6 +197,10 @@ def main() -> None:
 
             app.set_agent("Codex")
             shot(app.root, "codex")
+
+            app.settings_dialog()
+            shot(app.dialog.win, "settings")
+            app.dialog.close()
 
             app.set_agent("Claude Code")
             app.pick(v.USAGE)
