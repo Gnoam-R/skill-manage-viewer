@@ -812,7 +812,7 @@ class App:
             ("★ 자주 쓰는 스킬에서 해제" if starred else "★ 자주 쓰는 스킬에 추가", lambda: self.toggle_pin(s), ""),
             ("", None, "-"),
             ("용도 설명 수정…", lambda: self.edit_note(s), ""),
-            ("SKILL.md 열어서 수정" if s["managed"] else "SKILL.md 열기 (보기)", lambda: self.edit_file(s), ""),
+            ("SKILL.md 수정…" if s["managed"] else "SKILL.md 보기", lambda: self.detail(s, page="SKILL.md", edit=s["managed"]), ""),
             ("", None, "-"),
         ]
         if s["managed"]:
@@ -832,11 +832,14 @@ class App:
             self.popup.close()
             self.popup = None
 
-    def detail(self, s: dict) -> None:
+    def detail(self, s: dict, page: str = "정보", edit: bool = False) -> None:
         self.close_popup()
         if self.detail_win and self.detail_win.win.winfo_exists():
-            self.detail_win.close()
-        self.detail_win = DetailDialog(self, s)
+            if not self.detail_win.discard_ok():  # unsaved edits in the open one: let the user decide
+                return
+            self.detail_win.editing = False
+            self.detail_win.win.destroy()
+        self.detail_win = DetailDialog(self, s, page, edit)
 
     def _side_window(self, title: str, width: int, height: int) -> tk.Toplevel:
         """A themed window beside the panel (not over it), for dialogs."""
@@ -1312,17 +1315,79 @@ class Popup:
             self.win.destroy()
 
 
+INLINE = re.compile(r"(\*\*[^*\n]+\*\*|`[^`\n]+`)")
+
+
+def render_markdown(app: "App", text: tk.Text, md: str) -> None:
+    """Show SKILL.md readably: front matter muted, headings large, lists with bullets, code blocks and `inline code`
+    in a monospace font on a tint, **bold** bold. Never italic."""
+    c = app.c
+    mono = (plat.MONO_FONT, round(10 * plat.FONT_SCALE), "normal", "roman")
+    text.configure(state="normal")
+    text.delete("1.0", "end")
+    for tag, spec in {
+        "h1": dict(font=app.f(16, True), spacing1=14, spacing3=6),
+        "h2": dict(font=app.f(13, True), spacing1=12, spacing3=4),
+        "h3": dict(font=app.f(11, True), spacing1=8, spacing3=2),
+        "bold": dict(font=app.f(10, True)),
+        "code": dict(font=mono, background=c["rail"], lmargin1=10, lmargin2=10),
+        "inline": dict(font=mono, background=c["rail"]),
+        "bullet": dict(lmargin1=14, lmargin2=30, spacing1=2),
+        "quote": dict(foreground=c["muted"], lmargin1=14, lmargin2=14),
+        "meta": dict(font=mono, foreground=c["muted"]),
+        "rule": dict(font=app.f(4), spacing1=2),
+    }.items():
+        text.tag_config(tag, **spec)
+
+    def put(line: str, *tags: str) -> None:
+        for part in INLINE.split(line):
+            if part.startswith("**") and part.endswith("**") and len(part) > 4:
+                text.insert("end", part[2:-2], (*tags, "bold"))
+            elif part.startswith("`") and part.endswith("`") and len(part) > 2:
+                text.insert("end", part[1:-1], (*tags, "inline"))
+            else:
+                text.insert("end", part, tags)
+        text.insert("end", "\n", tags)
+
+    front, body = mgr.split_skill_md(md.replace("\r\n", "\n"))
+    if front:
+        for line in front.split("\n"):
+            put(line, "meta")
+        text.insert("end", "\n", ("rule",))
+    in_code = False
+    for line in body.split("\n"):
+        if line.strip().startswith("```"):
+            in_code = not in_code
+        elif in_code:
+            text.insert("end", line + "\n", ("code",))
+        elif m := re.match(r"(#{1,3})\s+(.*)", line):
+            put(m[2], f"h{len(m[1])}")
+        elif m := re.match(r"\s*[-*+]\s+(.*)", line):
+            text.insert("end", "•  ", ("bullet",))
+            put(m[1], "bullet")
+        elif m := re.match(r"\s*\d+[.)]\s+(.*)", line):
+            text.insert("end", f"{re.match(r'\s*(\d+[.)])', line)[1]}  ", ("bullet",))  # type: ignore[index]
+            put(m[1], "bullet")
+        elif line.startswith(">"):
+            put(line.lstrip("> "), "quote")
+        else:
+            put(line)
+    text.configure(state="disabled")
+
+
 class DetailDialog:
-    """Everything about one skill: purpose, category, origin and version, where it lives, which agents have it,
-    its files and its SKILL.md, with the actions that apply to it."""
+    """Everything about one skill, on two pages: 정보 (purpose, category, origin and version, where it lives, which
+    agents have it, its files) and SKILL.md (a readable view, and for skills managed here an edit form)."""
 
-    W, H = 600, 760
+    W, H = 640, 780
 
-    def __init__(self, app: App, s: dict):
+    def __init__(self, app: App, s: dict, page: str = "정보", edit: bool = False):
         self.app, self.s, c = app, s, app.c
         self.win = win = app._side_window(f"{s['name']} 상세", self.W, self.H)
         win.protocol("WM_DELETE_WINDOW", self.close)
         fg, soft = app.cat_colors(s["cat"])
+        self.editing = False
+        self.page = ""
 
         head = tk.Frame(win, bg=c["surface"])
         head.pack(fill="x")
@@ -1339,13 +1404,12 @@ class DetailDialog:
             app._label(chips, "업데이트 있음", 10, bold=True, fg=c["on_accent"], bg=c["accent"], padx=8, pady=2).pack(side="left", padx=6)
         tk.Frame(win, height=1, bg=c["line"]).pack(fill="x")
 
-        # actions at the bottom first, so the SKILL.md view can take whatever height is left. Two rows: six buttons
-        # don't fit one line of this window.
+        # actions at the bottom first, so the page can take whatever height is left. Two rows: they don't fit one line.
         bottom = tk.Frame(win, bg=c["bg"])
         bottom.pack(side="bottom", fill="x", padx=16, pady=(8, 12))
         tools = tk.Frame(bottom, bg=c["bg"])
         tools.pack(fill="x")
-        app._button(tools, "SKILL.md 수정" if s["managed"] else "SKILL.md 열기", lambda: app.edit_file(s)).pack(side="left")
+        app._button(tools, "외부 편집기로 열기", lambda: app.edit_file(s)).pack(side="left")
         app._button(tools, "폴더 열기", lambda: plat.open_folder(s["path"])).pack(side="left", padx=(8, 0))
         app._button(tools, "이름 복사", lambda: app.copy(s["name"])).pack(side="left", padx=(8, 0))
         if s["repo"]:
@@ -1357,8 +1421,29 @@ class DetailDialog:
         app._button(ends, "닫기", self.close).pack(side="right")
         tk.Frame(win, height=1, bg=c["line"]).pack(side="bottom", fill="x")
 
-        body = tk.Frame(win, bg=c["bg"])
-        body.pack(fill="both", expand=True, padx=20, pady=(14, 0))
+        bar, self._restyle = app._tab_bar(win, ["정보", "SKILL.md"], self.show_page)
+        bar.pack(fill="x")
+        tk.Frame(win, height=1, bg=c["line"]).pack(fill="x")
+        self.holder = tk.Frame(win, bg=c["bg"])
+        self.holder.pack(fill="both", expand=True, padx=20, pady=(14, 0))
+        self.show_page(page)
+        if edit:
+            self.begin_edit()
+
+    # ---- pages ----------------------------------------------------------------------------------
+    def show_page(self, name: str) -> None:
+        if name != self.page and not self.discard_ok():
+            self._restyle(self.page)  # the tab bar already moved; put it back
+            return
+        self.editing = False
+        for w in self.holder.winfo_children():
+            w.destroy()
+        self.page = name
+        self._restyle(name)
+        (self._info if name == "정보" else self._view)()
+
+    def _info(self) -> None:
+        app, s, c, body = self.app, self.s, self.app.c, self.holder
         app._label(body, s["note"], 12, bold=True, bg=c["bg"], anchor="w", justify="left",
                    wraplength=app.px(self.W - 40)).pack(fill="x")
         if s["desc"] and s["desc"] != s["note"]:
@@ -1370,19 +1455,129 @@ class DetailDialog:
             app._label(grid, key, 10, fg=c["muted"], bg=c["bg"], anchor="nw").grid(row=i, column=0, sticky="nw", pady=3)
             app._label(grid, value, 10, bg=c["bg"], anchor="w", justify="left",
                        wraplength=app.px(self.W - 160)).grid(row=i, column=1, sticky="w", padx=(14, 0), pady=3)
-        app._label(body, "SKILL.md", 10, bold=True, fg=c["muted"], bg=c["bg"], anchor="w").pack(fill="x")
-        frame = tk.Frame(body, bg=c["surface"], highlightthickness=1, highlightbackground=c["line"])
-        frame.pack(fill="both", expand=True, pady=(4, 0))
-        self.text = tk.Text(frame, wrap="word", relief="flat", bd=0, padx=12, pady=10, font=app.f(10),
-                            bg=c["surface"], fg=c["text"], insertbackground=c["text"], height=8)
-        self.text.pack(fill="both", expand=True)  # scrolls with the wheel; the system scrollbar wouldn't match the theme
+
+    def _text_box(self, parent, height: int = 8, mono: bool = False) -> tk.Text:
+        """A bordered Text in the app's colors; the border turns accent-colored while it has the cursor."""
+        app, c = self.app, self.app.c
+        frame = tk.Frame(parent, bg=c["surface"], highlightthickness=1, highlightbackground=c["line"], highlightcolor=c["accent"])
+        font = (plat.MONO_FONT, round(10 * plat.FONT_SCALE), "normal", "roman") if mono else app.f(10)
+        text = tk.Text(frame, wrap="word", relief="flat", bd=0, padx=12, pady=10, font=font, undo=True,
+                       bg=c["surface"], fg=c["text"], insertbackground=c["text"], height=height,
+                       selectbackground=c["soft"], selectforeground=c["text"], highlightthickness=0)
+        text.pack(fill="both", expand=True)
+        text.bind("<FocusIn>", lambda e: frame.config(highlightbackground=c["accent"]))
+        text.bind("<FocusOut>", lambda e: frame.config(highlightbackground=c["line"]))
+        text.frame = frame  # type: ignore[attr-defined]
+        return text
+
+    def _view(self) -> None:
+        """The readable SKILL.md, with the button that turns it into the edit form."""
+        app, s, c, body = self.app, self.s, self.app.c, self.holder
+        top = tk.Frame(body, bg=c["bg"])
+        top.pack(fill="x", pady=(0, 6))
+        app._label(top, "SKILL.md", 10, bold=True, fg=c["muted"], bg=c["bg"]).pack(side="left")
+        if s["managed"]:
+            self.edit_btn = app._button(top, "수정", self.begin_edit, primary=True)
+            self.edit_btn.pack(side="right")
+        else:
+            app._label(top, f"{s['origin']} 제공이라 보기만 가능합니다", 10, fg=c["muted"], bg=c["bg"]).pack(side="right")
+        self.text = self._text_box(body, height=8)
+        self.text.frame.pack(fill="both", expand=True)  # type: ignore[attr-defined]
         try:
             content = (s["path"] / "SKILL.md").read_text(encoding="utf-8", errors="replace")
         except OSError as e:
             content = f"읽지 못했습니다: {e}"
-        self.text.insert("1.0", content)
-        self.text.configure(state="disabled")  # a viewer; editing goes through the editor button
+        render_markdown(app, self.text, content)  # leaves it read-only
 
+    # ---- editing --------------------------------------------------------------------------------
+    def begin_edit(self) -> None:
+        app, s = self.app, self.s
+        if not s["managed"] or self.editing:
+            return
+        if s["repo"] and not messagebox.askokcancel(
+            "원본 저장소 파일 수정",
+            f"이 스킬은 git 저장소({mgr.repo_name(s['repo'])})를 그대로 가리킵니다.\n"
+            "저장하면 원본 저장소의 파일이 바뀌고, 이후 업데이트 때 충돌할 수 있습니다.\n계속할까요?",
+            parent=self.win):
+            return
+        if self.page != "SKILL.md":
+            self.show_page("SKILL.md")
+        try:
+            self.orig = mgr.read_skill_md(s["path"])
+        except OSError as e:
+            messagebox.showerror("읽지 못했습니다", str(e), parent=self.win)
+            return
+        self.editing = True
+        c, body = app.c, self.holder
+        for w in body.winfo_children():
+            w.destroy()
+        top = tk.Frame(body, bg=c["bg"])
+        top.pack(fill="x", pady=(0, 8))
+        app._label(top, "SKILL.md 수정", 10, bold=True, fg=c["muted"], bg=c["bg"]).pack(side="left")
+        app._label(top, "Ctrl+S 저장 · Esc 취소", 9, fg=c["muted"], bg=c["bg"]).pack(side="right")
+
+        # save / cancel stay pinned under the form
+        foot = tk.Frame(body, bg=c["bg"])
+        foot.pack(side="bottom", fill="x", pady=(8, 8))
+        self.status = app._label(foot, "", 10, fg=c["muted"], bg=c["bg"], anchor="w", justify="left", wraplength=app.px(self.W - 220))
+        self.status.pack(side="left", fill="x", expand=True)
+        app._button(foot, "취소", self.cancel).pack(side="right")
+        app._button(foot, "저장", self.save, primary=True).pack(side="right", padx=(0, 8))
+
+        app._label(body, f"이름  {s['name']}  (폴더 이름이라 여기서는 바꾸지 않습니다)", 10, fg=c["muted"], bg=c["bg"],
+                   anchor="w").pack(fill="x")
+        app._label(body, "설명 — 에이전트가 이 스킬을 언제 쓸지 판단하는 문장입니다", 10, bold=True, bg=c["bg"],
+                   anchor="w").pack(fill="x", pady=(10, 3))
+        self.desc_text = self._text_box(body, height=3)
+        self.desc_text.frame.pack(fill="x")  # type: ignore[attr-defined]
+        self.manual_var = tk.BooleanVar(value=self.orig[1])
+        app._check(body, "수동 호출 전용 (사용자가 /이름으로 직접 부를 때만 사용)", self.manual_var).pack(fill="x", pady=(8, 0))
+        app._label(body, "본문 — 스킬이 따를 지시 (마크다운)", 10, bold=True, bg=c["bg"], anchor="w").pack(fill="x", pady=(10, 3))
+        self.body_text = self._text_box(body, height=10, mono=True)
+        self.body_text.frame.pack(fill="both", expand=True)  # type: ignore[attr-defined]
+        self.desc_text.insert("1.0", self.orig[0])
+        self.body_text.insert("1.0", self.orig[2].rstrip("\n"))
+        for t in (self.desc_text, self.body_text):
+            t.edit_reset()  # Ctrl+Z must not undo the initial fill
+        self.win.bind("<Control-s>", lambda e: self.save())
+        self.win.bind("<Escape>", lambda e: self.cancel())
+        self.body_text.focus_set()
+
+    def current(self) -> tuple[str, bool, str]:
+        return (" ".join(self.desc_text.get("1.0", "end").split()), self.manual_var.get(), self.body_text.get("1.0", "end").rstrip("\n"))
+
+    def dirty(self) -> bool:
+        if not self.editing:
+            return False
+        desc, manual, body = self.current()
+        return (desc, manual, body) != (" ".join(self.orig[0].split()), self.orig[1], self.orig[2].rstrip("\n"))
+
+    def discard_ok(self) -> bool:
+        """True unless there are unsaved edits the user wants to keep."""
+        return not self.dirty() or messagebox.askyesno("저장하지 않은 변경", "저장하지 않은 변경이 있습니다. 버릴까요?", parent=self.win)
+
+    def cancel(self) -> None:
+        if self.discard_ok():
+            self.win.unbind("<Escape>")
+            self.win.unbind("<Control-s>")
+            self.editing = False
+            self.show_page("SKILL.md")
+
+    def save(self) -> None:
+        desc, manual, body = self.current()
+        try:
+            backup = mgr.save_skill_md(self.s["path"], desc, manual, body)
+        except (mgr.ManagerError, OSError) as e:
+            self.status.config(text=str(e), fg=self.app.c["danger"])
+            return
+        app, agent, path = self.app, self.s["agent"], self.s["path"]
+        app.say("저장했습니다" + (f" (이전 파일: {backup.name})" if backup else " (바뀐 내용이 없습니다)"), ms=6000)
+        self.editing = False
+        app.load()  # the list (note, manual badge, search text) follows the file
+        new = next((x for x in app.data.get(agent, []) if x["path"] == path), self.s)
+        app.detail(new, page="SKILL.md")  # reopen on the fresh data, back in read mode
+
+    # ---- the rest -------------------------------------------------------------------------------
     def facts(self) -> list[tuple[str, str]]:
         app, s = self.app, self.s
         p = s["path"]
@@ -1402,13 +1597,15 @@ class DetailDialog:
         return facts
 
     def delete(self) -> None:
+        if not self.discard_ok():
+            return
         before = self.app.data
         self.app.delete(self.s)
         if self.app.data is not before:  # the list was reloaded, so the skill is gone
             self.close()
 
     def close(self) -> None:
-        if self.win.winfo_exists():
+        if self.win.winfo_exists() and self.discard_ok():
             self.win.destroy()
 
 

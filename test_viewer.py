@@ -424,7 +424,7 @@ class PanelTest(unittest.TestCase):
         legacy = labels(find(app, "Codex", "legacy"))
         self.assertEqual(legacy[0], "상세 보기")
         self.assertIn("삭제…", legacy)
-        self.assertIn("SKILL.md 열어서 수정", legacy)
+        self.assertIn("SKILL.md 수정…", legacy)
         self.assertIn("이 스킬의 저장소 업데이트 확인", labels(find(app, "Claude Code", "gitskill")))
         ro = next(s for s in app.data["Claude Code"] if not s["managed"])
         self.assertNotIn("삭제…", labels(ro))  # plugin / app-synced skills can't be deleted from here
@@ -457,8 +457,10 @@ class PanelTest(unittest.TestCase):
         for expected in ("gitskill", "저장소", "버전", "설치된 에이전트", "위치", "SKILL.md", "삭제…", "업데이트 확인"):
             self.assertTrue(any(expected in t for t in shown), expected)
         self.assertTrue(any(t.startswith("git · ") for t in shown))
+        d.show_page("SKILL.md")
         self.assertIn("description: does a thing", d.text.get("1.0", "end"))
-        self.assertEqual(str(d.text.cget("state")), "disabled")  # a viewer, not an editor
+        self.assertEqual(str(d.text.cget("state")), "disabled")  # a viewer until 수정 is pressed
+        d.show_page("정보")
         with mock.patch.object(v.plat, "open_folder") as opened:
             next(w for w in walk(d.win) if isinstance(w, tk.Label) and w.cget("text") == "폴더 열기").event_generate("<Button-1>")
         opened.assert_called_once()
@@ -473,6 +475,112 @@ class PanelTest(unittest.TestCase):
         self.assertFalse(d.win.winfo_exists())  # one detail window at a time
         self.assertNotIn("삭제…", texts(app.detail_win.win))
         app.detail_win.close()
+
+    def test_04d_skill_md_view_is_rendered_and_the_edit_form_saves(self):
+        app = self.app
+        legacy = find(app, "Codex", "legacy")
+        path = legacy["path"]
+        (path / "SKILL.md").write_text(
+            "---\nname: legacy\ndescription: does a thing\nallowed-tools: Read\n---\n"
+            "# Heading\n\nSome **bold** text and `code`.\n\n- first item\n- second item\n\n```\nprint('x')\n```\n",
+            encoding="utf-8",
+        )
+        app.load()
+        app.detail(find(app, "Codex", "legacy"), page="SKILL.md")
+        app.root.update()
+        d = app.detail_win
+        # readable view: headings, bullets, code blocks and inline code get their own tags; the file is hidden behind them
+        t = d.text
+        shown = t.get("1.0", "end")
+        self.assertIn("•  first item", shown)
+        self.assertNotIn("**bold**", shown)
+        self.assertNotIn("`code`", shown)
+        self.assertTrue(t.tag_ranges("h1") and t.tag_ranges("bold") and t.tag_ranges("inline") and t.tag_ranges("code"))
+        self.assertTrue(t.tag_ranges("meta"))  # the front matter, muted
+        self.assertEqual(str(t.cget("state")), "disabled")
+        # no tag may be italic (the app never is)
+        for tag in ("h1", "h2", "h3", "bold", "code", "inline", "meta", "bullet", "quote"):
+            font = t.tag_cget(tag, "font")
+            if font:
+                self.assertEqual(tkfont.Font(root=app.root, font=font).actual("slant"), "roman", tag)
+        self.shot(d.win, "t4d_skill_md_view")
+
+        # a click on 수정 opens the form with the file's current values
+        with mock.patch.object(v.messagebox, "askokcancel", return_value=True):
+            d.edit_btn.event_generate("<Button-1>", x=2, y=2)
+            app.root.update()
+        self.assertTrue(d.editing)
+        self.assertEqual(d.desc_text.get("1.0", "end").strip(), "does a thing")
+        self.assertFalse(d.manual_var.get())
+        self.assertIn("# Heading", d.body_text.get("1.0", "end"))
+        self.assertFalse(d.dirty())
+        self.shot(d.win, "t4d_skill_md_edit")
+
+        # edit, then 저장: the file changes, other keys survive, the old file is backed up, the list follows
+        d.desc_text.delete("1.0", "end")
+        d.desc_text.insert("1.0", "새로 쓴 설명")
+        d.manual_var.set(True)
+        d.body_text.insert("end", "\nAdded line.")
+        self.assertTrue(d.dirty())
+        trash_before = len(list((mgr.STORE / "trash").glob("*_SKILL.md"))) if (mgr.STORE / "trash").exists() else 0
+        d.save()
+        app.root.update()
+        out = (path / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn('description: "새로 쓴 설명"', out)
+        self.assertIn("allowed-tools: Read", out)
+        self.assertIn("disable-model-invocation: true", out)
+        self.assertIn("Added line.", out)
+        self.assertEqual(len(list((mgr.STORE / "trash").glob("*_SKILL.md"))), trash_before + 1)
+        fresh = find(app, "Codex", "legacy")
+        self.assertEqual((fresh["desc"], fresh["manual"]), ("새로 쓴 설명", True))
+        d2 = app.detail_win
+        self.assertIsNot(d2, d)
+        self.assertEqual((d2.page, d2.editing), ("SKILL.md", False))  # reopened on the fresh data, in read mode
+        self.assertIn("수동", texts(d2.win))  # the manual badge appeared
+
+        # validation: an empty description is refused and the file is left alone
+        with mock.patch.object(v.messagebox, "askokcancel", return_value=True):
+            d2.begin_edit()
+        before = (path / "SKILL.md").read_bytes()
+        d2.desc_text.delete("1.0", "end")
+        d2.save()
+        self.assertIn("설명", d2.status.cget("text"))
+        self.assertEqual((path / "SKILL.md").read_bytes(), before)
+
+        # unsaved edits are not thrown away silently: cancel, tab switch and close all ask first
+        d2.desc_text.insert("1.0", "temporary")
+        with mock.patch.object(v.messagebox, "askyesno", return_value=False) as ask:
+            d2.cancel()
+            d2.show_page("정보")
+            d2.close()
+            self.assertEqual(ask.call_count, 3)
+        self.assertTrue(d2.editing and d2.win.winfo_exists() and d2.page == "SKILL.md")
+        with mock.patch.object(v.messagebox, "askyesno", return_value=True):
+            d2.cancel()  # confirmed: back to the read-only view, nothing written
+        self.assertEqual((d2.editing, d2.page), (False, "SKILL.md"))
+        self.assertEqual((path / "SKILL.md").read_bytes(), before)
+        d2.close()
+
+    def test_04e_edit_form_respects_who_owns_the_skill(self):
+        app = self.app
+        ro = next(s for s in app.data["Claude Code"] if not s["managed"])  # plugin / app-synced: view only
+        app.detail(ro, page="SKILL.md")
+        app.root.update()
+        self.assertFalse(hasattr(app.detail_win, "edit_btn"))
+        app.detail_win.begin_edit()
+        self.assertFalse(app.detail_win.editing)
+        app.detail_win.close()
+        gs = find(app, "Claude Code", "gitskill")  # linked into a git clone: ask before touching the clone's file
+        app.detail(gs, page="SKILL.md")
+        with mock.patch.object(v.messagebox, "askokcancel", return_value=False) as ask:
+            app.detail_win.begin_edit()
+            ask.assert_called_once()
+            self.assertIn("git", ask.call_args[0][1])
+        self.assertFalse(app.detail_win.editing)
+        app.detail_win.close()
+        labels = [label for label, _, _ in app.menu_items(find(app, "Codex", "legacy"))]
+        self.assertIn("SKILL.md 수정…", labels)
+        self.assertIn("SKILL.md 보기", [label for label, _, _ in app.menu_items(ro)])
 
     def test_04c_themed_checkbox(self):
         app = self.app
