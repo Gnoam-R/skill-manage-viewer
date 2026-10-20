@@ -22,6 +22,7 @@ from PIL import ImageGrab
 import install
 import platform_support as plat
 import skill_manager as mgr
+import skill_update as upd
 import skill_viewer as v
 
 SHOTS = Path(tempfile.gettempdir())
@@ -96,7 +97,7 @@ class PanelTest(unittest.TestCase):
         subprocess.run([*git, "add", "-A"], cwd=cls.repo, check=True, capture_output=True)
         subprocess.run([*git, "commit", "-qm", "init"], cwd=cls.repo, check=True, capture_output=True)
         mgr.install([cls.repo / "skills/gitskill"], ["Claude Code"])
-        cls.app = v.App(with_tray=plat.WIN)  # the macOS tray is a child process; CI has no menu bar to show it in
+        cls.app = v.App(with_tray=plat.WIN, auto_update=False)  # the macOS tray is a child process; CI has no menu bar to show it in
         cls.app.root.update()
 
     @classmethod
@@ -352,6 +353,67 @@ class PanelTest(unittest.TestCase):
         self.assertNotIn(v.USAGE, texts(app.rail))
         self.assertIsNone(app.cat)
         app.set_agent("Claude Code")
+    def test_03h_app_updates_itself_and_restarts_without_surprises(self):
+        app = self.app
+        done = upd.Result("updated", "", "aaa1111", "bbb2222", ["Feat: 새 기능"])
+        with (
+            mock.patch.object(upd, "apply", return_value=done),
+            mock.patch.object(upd, "restart") as restart,
+            mock.patch.object(app, "quit") as quit_,
+        ):
+            self.assertFalse(app.pending_restart)
+            app.auto_update(manual=True)
+            self.settle(lambda: app.pending_restart)
+            self.assertIn("새 버전 · 다시 시작", texts(app.actions))  # the header pill
+            restart.assert_not_called()  # the window is open: the user decides when to restart
+            app.toggle_theme()  # the header is rebuilt, the pill must survive
+            self.assertIn("새 버전 · 다시 시작", texts(app.actions))
+            app.toggle_theme()
+            app.root.update()  # a widget that isn't mapped yet ignores events
+            pill = next(w for w in walk(app.actions) if isinstance(w, tk.Label) and w.cget("text") == "새 버전 · 다시 시작")
+            pill.event_generate("<Button-1>", x=2, y=2)
+            app.root.update()
+            restart.assert_called_once_with(hidden=False)
+            quit_.assert_called_once()
+            with mock.patch.object(upd, "apply") as again:  # an update is already on disk: no second check
+                app.auto_update()
+                app.auto_update(manual=True)
+                again.assert_not_called()
+            restart.reset_mock()
+            app.hide()  # nobody is looking: switch right away, and start hidden again
+            app._update_done(done)
+            restart.assert_called_once_with(hidden=True)
+            app.show()
+        app.pending_restart = None
+        if app.restart_pill:
+            app.restart_pill.destroy()
+            app.restart_pill = None
+
+    def test_03i_update_messages_and_the_on_off_switch(self):
+        app = self.app
+        with mock.patch.object(upd, "apply", return_value=upd.Result("up-to-date", "", "a", "a")) as apply:
+            app.auto_update()  # automatic and nothing new: silent
+            self.settle(lambda: apply.called)
+            self.assertNotIn("최신", app.footer.cget("text"))
+            app.auto_update(manual=True)
+            self.settle(lambda: apply.call_count == 2 and "최신" in app.footer.cget("text"))
+        failed = upd.Result("failed", "새 버전을 확인하는 중 실패해 이전 버전으로 되돌렸습니다: x", "a", "c")
+        app._update_done(failed)
+        self.assertIn("되돌렸습니다", app.footer.cget("text"))
+        app.footer.config(text="")
+        app._update_done(failed)  # the same broken version is not reported again every few hours
+        self.assertEqual(app.footer.cget("text"), "")
+        app._update_done(failed, manual=True)  # unless the user asked
+        self.assertIn("되돌렸습니다", app.footer.cget("text"))
+        self.assertTrue(mgr.load_settings().get("auto_update", True))
+        app.toggle_auto_update()
+        self.assertFalse(mgr.load_settings()["auto_update"])
+        with mock.patch.object(upd, "apply") as off:
+            app.auto_update()
+            app.root.update()
+            off.assert_not_called()  # switched off: the automatic check does nothing
+        app.toggle_auto_update()
+        self.assertTrue(mgr.load_settings()["auto_update"])
 
     def test_04_menu_entries(self):
         app = self.app
@@ -775,8 +837,8 @@ class CategoryTest(unittest.TestCase):
         self.assertTrue(all(c["about"] for c in v.CATALOG))
 
     def test_listed_skills_ignore_keyword_guesses(self):
-        # 'review' would otherwise pull ui-audit into 리뷰·품질; the list wins, with or without a plugin prefix
-        self.assertEqual(v.categorize("ui-audit", "audit the UI"), "UI·디자인")
+        # the 'ponytail' keyword would otherwise file ponytail-gain under 개발·테스트; the list wins, with or without a plugin prefix
+        self.assertEqual(v.categorize("ponytail-gain", ""), "리뷰·품질")
         self.assertEqual(v.categorize("superpowers:requesting-code-review", ""), "리뷰·품질")
         self.assertEqual(v.categorize("zz-helper", "Review pull requests for bugs"), "리뷰·품질")  # unknown: keywords
         self.assertEqual(v.categorize("zzz", "nothing matches here"), v.OTHER)
