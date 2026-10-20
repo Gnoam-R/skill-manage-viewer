@@ -6,7 +6,9 @@ Drives the panel in-process (no synthetic mouse/keyboard input) against temp age
 
 import ctypes
 import json
+import inspect
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -569,6 +571,16 @@ class PanelTest(unittest.TestCase):
                     mgr.remove("Claude Code", n)
             app.set_agent("Claude Code")
             app.load()
+
+    def test_03j_update_check_from_the_tray_brings_the_window_up_to_show_the_answer(self):
+        app = self.app
+        app.hide()
+        with mock.patch.object(upd, "apply", return_value=upd.Result("up-to-date", "")):
+            app.update_app()  # what the tray item sends
+            self.settle(lambda: "최신 버전" in app.footer.cget("text"))
+        self.assertTrue(app.visible)
+        self.assertIn("SkillDesk는 최신 버전입니다", app.footer.cget("text"))
+        app.footer.config(text=v.DEFAULT_HINT)  # later tests look at the footer
 
     def test_03h_app_updates_itself_and_restarts_without_surprises(self):
         app = self.app
@@ -1143,6 +1155,16 @@ class PlatformTest(unittest.TestCase):
             popen.reset_mock()
             plat.open_folder(Path(t) / "missing")  # not a folder: nothing is started
             popen.assert_not_called()
+
+
+class TrayMenuTest(unittest.TestCase):
+    def test_every_tray_item_is_an_allowed_command_the_app_can_run(self):
+        # a merge once dropped the app-update items while every other test still passed: check the menu itself
+        sent = re.findall(r'put\("(\w+)"\)', inspect.getsource(v.tray_menu))
+        self.assertTrue({"update_app", "toggle_auto_update"} <= set(sent), sent)
+        for cmd in sent:
+            self.assertIn(cmd, v.TRAY_COMMANDS, cmd)  # the macOS child process may only ask for these
+            self.assertTrue(callable(getattr(v.App, cmd, None)), cmd)
 
 
 class CategoryTest(unittest.TestCase):

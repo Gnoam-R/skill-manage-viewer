@@ -79,7 +79,9 @@ DARK = dict(bg="#161B22", surface="#1F2630", rail="#1A2029", line="#3A4452", tex
             accent="#7DB0FF", on_accent="#0B1220", soft="#2A3B55", warn_bg="#4A3A14", warn_fg="#FFD98A",
             danger="#FF8A80", danger_bg="#4A2220")
 FONT, FALLBACK_FONT = "Pretendard", plat.FALLBACK_FONT
-TRAY_COMMANDS = {"toggle", "add_dialog", "check_updates", "load", "quit"}  # what the tray may ask the app to do
+TRAY_COMMANDS = {  # what the tray may ask the app to do
+    "toggle", "add_dialog", "check_updates", "update_app", "toggle_auto_update", "load", "quit",
+}
 TRAY_NAME = "메뉴 막대" if plat.MAC else "트레이"
 DEFAULT_HINT = f"클릭: 이름 복사 · ☆: 자주 쓰는 스킬 지정 · ⋯ 또는 우클릭: 수정·삭제 · {TRAY_NAME} 아이콘으로 열기/닫기"
 
@@ -250,7 +252,9 @@ def tray_menu(put):
     return pystray.Menu(
         pystray.MenuItem("열기 / 닫기", lambda i, m: put("toggle"), default=True),
         pystray.MenuItem("스킬 추가…", lambda i, m: put("add_dialog")),
-        pystray.MenuItem("업데이트 확인", lambda i, m: put("check_updates")),
+        pystray.MenuItem("스킬 업데이트 확인", lambda i, m: put("check_updates")),
+        pystray.MenuItem("SkillDesk 업데이트 확인", lambda i, m: put("update_app")),
+        pystray.MenuItem("SkillDesk 자동 업데이트 켜기/끄기", lambda i, m: put("toggle_auto_update")),
         pystray.MenuItem("새로고침", lambda i, m: put("load")),
         pystray.MenuItem("종료", lambda i, m: put("quit")),
     )
@@ -1185,6 +1189,8 @@ class App:
         self.bg(lambda: upd.apply(), lambda res: self._update_done(res, manual))
 
     def update_app(self) -> None:
+        if not self.visible:  # asked from the tray: show the window so the answer (and the restart button) can be seen
+            self.show()
         self.auto_update(manual=True)
 
     def toggle_auto_update(self) -> None:
