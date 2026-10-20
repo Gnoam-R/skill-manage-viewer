@@ -321,7 +321,7 @@ https://gitlab.example.com/group/repo/-/tree/dev/x    GitLab 링크도 같은 �
 | 디버깅·검증 | 문제의 원인을 찾거나, 끝내기 전에 실제로 동작하는지 확인할 때 | `systematic-debugging`, `verification-before-completion` |
 | 리뷰·품질 | 완성된 변경을 다른 눈으로 점검하고 품질 부채를 관리할 때 | `requesting-code-review`, `review-agent` |
 | Git·협업 | 커밋·PR·브랜치와 저장소 규칙으로 변경을 공유할 때 | `using-git-worktrees`, `finishing-a-development-branch` |
-| UI·디자인 | 화면·브랜드·이미지 같은 시각물을 만들거나 고치거나 점검할 때 | `ui-polish`, `impeccable`, `canvas-design` |
+| UI·디자인 | 화면·브랜드·이미지 같은 시각물을 만들거나 고치거나 점검할 때 | `design-system`, `impeccable`, `canvas-design` |
 | 문서·자료 | 문서·발표·표 파일을 만들거나, 자료를 조사해 정리할 때 | `docx`, `pdf`, `deep-research` |
 | 자동화·브라우저 | 브라우저·PC를 대신 조작하거나 예약·반복 작업을 돌릴 때 | `built-in-browser`, `computer-use` |
 | 에이전트·스킬 설정 | 에이전트 자체(스킬·플러그인·설정·메모리)를 만들거나 관리할 때 | `skill-creator`, `plugin` |

@@ -257,6 +257,7 @@ python docs/make_screenshots.py     # Windows에서 실행, docs/images/*.png를
 
 ## 코드 규칙
 
+- **내 PC의 정보를 커밋하지 않습니다.** 이 프로그램은 각자의 PC에 설치된 스킬과 플러그인을 읽는 도구라서, 저장소에는 내 홈 폴더 경로, 계정 이름, 내 PC나 회사에만 있는 스킬 이름이 들어가면 안 됩니다. `skill_notes.json`·`skill_categories.json`에는 누구나 설치할 수 있는 공개 스킬만 넣고, 내 스킬의 설명은 앱의 `⋯ → 용도 설명 수정`(내 PC의 `~/.skill-manager/notes.json`에만 저장됩니다)으로 바꾸세요. `test_privacy.py`가 이를 검사합니다.
 - **Tk는 `skill_viewer.py`에만** 둡니다. `skill_manager.py`는 화면 없이 테스트할 수 있어야 합니다.
 - **OS 분기는 `platform_support.py`에만** 둡니다.
 - **아무것도 영구 삭제하지 않습니다.** 사용자 폴더를 지울 때는 `mgr.trash()`로 옮깁니다. 지우는 것은 우리가 방금 만든 임시물(실패한 clone 등)뿐입니다.

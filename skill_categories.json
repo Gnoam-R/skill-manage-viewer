@@ -31,7 +31,7 @@
     "name": "Git·협업",
     "about": "커밋·PR·브랜치와 저장소 규칙으로 변경을 공유할 때",
     "keywords": "gitlab|github|commit|\\bpr\\b|\\bgit\\b|worktree|branch|merge",
-    "skills": ["company-commit-pr", "gitlab-guide-check", "finishing-a-development-branch", "using-git-worktrees",
+    "skills": ["finishing-a-development-branch", "using-git-worktrees",
                "permissioned-github"]
   },
   {
@@ -39,8 +39,7 @@
     "about": "화면·브랜드·이미지 같은 시각물을 만들거나 고치거나 점검할 때",
     "keywords": "design|\\bui\\b|ux|brand|banner|theme|frontend|figma|canvas|styling|polish|image|visual|css",
     "skills": ["banner-design", "brand", "brand-guidelines", "canvas-design", "design", "design-system",
-               "design-taste-frontend", "frontend-design", "generative_ui", "impeccable", "theme-factory", "ui-audit",
-               "ui-design", "ui-polish", "ui-qa", "ui-styling", "ui-ux-pro-max", "ui-work", "web-artifacts-builder",
+               "design-taste-frontend", "frontend-design", "generative_ui", "impeccable", "theme-factory", "ui-styling", "ui-ux-pro-max", "web-artifacts-builder",
                "web-design-guidelines", "imagegen"]
   },
   {
