@@ -99,6 +99,7 @@ class PanelTest(unittest.TestCase):
         subprocess.run([*git, "commit", "-qm", "init"], cwd=cls.repo, check=True, capture_output=True)
         mgr.install([cls.repo / "skills/gitskill"], ["Claude Code"])
         cls.app = v.App(with_tray=plat.WIN, auto_update=False)  # the macOS tray is a child process; CI has no menu bar to show it in
+        cls.app.INSTANCE = f"skill-catalog-test-{os.getpid()}"  # not "skilldesk": an app running on this PC must not get this app's notes
         cls.app.root.update()
 
     @classmethod
@@ -159,6 +160,20 @@ class PanelTest(unittest.TestCase):
         app._pump()
         self.assertTrue(app.visible and app.root.state() == "normal")
         self.assertEqual(app.root.winfo_x(), moved)
+
+    def test_01c_starting_the_app_again_brings_the_hidden_window_back(self):
+        app = self.app
+        app.hide()
+        app._pump()
+        self.assertFalse(app.visible)  # no note: it stays in the tray
+        plat.ask_running_copy_to_show(app.INSTANCE)
+        app._pump()
+        app.root.update()
+        self.assertTrue(app.visible and app.root.state() == "normal")
+        app.hide()
+        app._pump()
+        self.assertFalse(app.visible)  # the note was read once: it does not bring the window back again
+        app.show()
 
     def test_01d_dialogs_open_centered_over_the_panel_and_stay_on_screen(self):
         app = self.app
@@ -1102,6 +1117,23 @@ class PlatformTest(unittest.TestCase):
             cwd=Path(__file__).parent,
         )
         self.assertEqual(other.stdout.strip(), "True")
+
+    def test_starting_the_app_again_leaves_one_note_for_the_running_copy(self):
+        name = f"skill-catalog-test-show-{os.getpid()}"
+        note = Path(tempfile.gettempdir()) / f"{name}.show"
+        try:
+            self.assertFalse(plat.take_show_request(name))  # nobody asked
+            plat.ask_running_copy_to_show(name)
+            plat.ask_running_copy_to_show(name)  # two quick starts are one request
+            self.assertTrue(plat.take_show_request(name))
+            self.assertFalse(plat.take_show_request(name))  # a note is read once
+            plat.ask_running_copy_to_show(name)
+            old = time.time() - 2 * plat.SHOW_REQUEST_TTL
+            os.utime(note, (old, old))  # left for a copy that is long gone
+            self.assertFalse(plat.take_show_request(name))
+            self.assertFalse(note.exists())  # and it is cleared away
+        finally:
+            note.unlink(missing_ok=True)
 
     def test_right_click_sequences_match_the_platform(self):
         self.assertEqual(plat.RIGHT_CLICK[0], "<Button-2>" if plat.MAC else "<Button-3>")

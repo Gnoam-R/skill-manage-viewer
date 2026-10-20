@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 WIN = sys.platform == "win32"
@@ -129,9 +130,11 @@ def register_font(path: Path) -> bool:
 
 # ---- single instance -----------------------------------------------------------------------------
 _lock_file = None  # keeps the lock for the life of the process
+INSTANCE = "skilldesk"  # names the lock and the 'show yourself' note of the one copy of the app that may run
+SHOW_REQUEST_TTL = 60  # seconds a note stays valid: a copy that is still starting up reads it late, a dead one never does
 
 
-def already_running(name: str = "skilldesk") -> bool:
+def already_running(name: str = INSTANCE) -> bool:
     """True if another copy of the app holds the lock. The OS drops the lock when that process dies."""
     global _lock_file
     f = open(Path(tempfile.gettempdir()) / f"{name}.lock", "a+b")  # noqa: SIM115 - must stay open
@@ -155,3 +158,20 @@ def release_lock() -> None:
     if _lock_file:
         _lock_file.close()  # closing the file drops the OS lock
         _lock_file = None
+
+
+def ask_running_copy_to_show(name: str = INSTANCE) -> None:
+    """The app was started again while a copy sits in the tray: leave it a note to show its window.
+    A file in the temp folder works the same on Windows and macOS; two quick starts leave one note."""
+    (Path(tempfile.gettempdir()) / f"{name}.show").touch()
+
+
+def take_show_request(name: str = INSTANCE) -> bool:
+    """True once per note left by ask_running_copy_to_show (reading it removes it). An old note is not for anybody."""
+    note = Path(tempfile.gettempdir()) / f"{name}.show"
+    try:
+        age = time.time() - note.stat().st_mtime
+        note.unlink()
+    except OSError:  # no note, or its writer still has it open: the next look finds it
+        return False
+    return age < SHOW_REQUEST_TTL
