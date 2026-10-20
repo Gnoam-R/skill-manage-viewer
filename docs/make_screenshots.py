@@ -23,9 +23,11 @@ import skill_manager as mgr  # noqa: E402
 import skill_viewer as v  # noqa: E402
 
 OUT = ROOT / "docs" / "images"
-MANUAL = {"grill-me", "grill-with-docs", "improve-codebase-architecture", "ui-audit"}
+MANUAL = {"grill-me", "grill-with-docs", "improve-codebase-architecture", "theme-factory"}
 GIT_SKILLS = ["grilling", "grill-me", "grill-with-docs", "domain-modeling", "codebase-design", "improve-codebase-architecture", "tdd"]
-LOCAL_SKILLS = ["ui-polish", "ui-audit", "web-design-guidelines", "pdf", "docx", "xlsx", "pptx", "deep-research", "built-in-browser"]
+LOCAL_SKILLS = [
+    "frontend-design", "theme-factory", "web-design-guidelines", "pdf", "docx", "xlsx", "pptx", "deep-research", "built-in-browser",
+]
 SYNCED_SKILLS = ["skill-creator", "canvas-design", "theme-factory"]
 PLUGIN_SKILLS = ["brainstorming", "systematic-debugging", "writing-plans", "verification-before-completion",
                  "requesting-code-review", "using-git-worktrees", "executing-plans"]
@@ -69,7 +71,7 @@ def demo_world(t: Path) -> Path:
     (t / "claude/settings.json").write_text(json.dumps({"enabledPlugins": {"superpowers@demo": True}}), encoding="utf-8")
     for n in ("skill-installer", "openai-docs"):
         write_skill(agents["Codex"] / ".system" / n)
-    for n in ("ui-polish", "pdf"):
+    for n in ("design-system", "pdf"):
         write_skill(agents["Codex"] / n)
     mgr.create("meeting-notes", "Summarize meeting notes into a short report", ["Claude Code", "Codex"])
     mgr.set_note("meeting-notes", "회의록을 요약 보고서로 정리 (직접 만든 스킬 예시)")
@@ -106,7 +108,7 @@ def main() -> None:
                 mock.patch.object(mgr, "UPDATER", t / "none.ps1"), mock.patch.object(mgr, "open_in_editor"), \
                 mock.patch.object(mgr, "AGENT_DIRS", dict(mgr.AGENT_DIRS)), mock.patch.object(v, "HOME", t):
             repo = demo_world(t)
-            app = v.App(with_tray=False)
+            app = v.App(with_tray=False, auto_update=False)
             app.load()
             shot(app.root, "main")
 
