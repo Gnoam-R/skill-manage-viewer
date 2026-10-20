@@ -290,6 +290,42 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(texts(app.rail)[1], v.STAR)  # the entry stays at 0
         app.set_agent("Claude Code")
 
+    def test_03g_settings_dialog_chooses_which_agent_tabs_exist(self):
+        app = self.app
+        app.set_agent("Codex")
+        app.settings_dialog()
+        app.root.update()
+        d = app.dialog
+        self.assertEqual(set(d.vars), set(v.AGENTS))
+        d.vars["Codex"].set(False)  # untick: the tab and its list go away, the panel falls back to the first tab
+        app.root.update()
+        try:
+            self.assertEqual(app.agents, ["Claude Code", "Antigravity"])
+            self.assertEqual(mgr.load_settings()["agents"], ["Claude Code", "Antigravity"])
+            self.assertEqual(app.agent.get(), "Claude Code")
+            self.assertEqual([t for t in texts(app.tabs) if "Codex" in t], [])
+            self.assertNotIn("Codex", app.data)
+            self.assertTrue(d.win.winfo_exists())  # the dialog stays open while the panel is rebuilt
+            self.assertEqual([a for a, var in app.dialog.vars.items() if var.get()], app.agents)
+            self.shot(d.win, "t3g_settings")
+            for a in ("Claude Code", "Antigravity"):  # the last way to an empty panel is refused
+                d.vars[a].set(False)
+            self.assertEqual(len(app.agents), 1)
+            self.assertIn("하나 이상", d.status.cget("text"))
+            self.assertTrue(any(var.get() for var in d.vars.values()))
+            app.add_dialog()  # the add dialog only offers the shown agents
+            self.assertEqual(list(app.dialog.agents), app.agents)
+            app.dialog.close()
+        finally:
+            app.settings_dialog()
+            for var in app.dialog.vars.values():
+                var.set(True)
+            app.dialog.close()
+            app.root.update()
+        self.assertEqual(app.agents, list(v.AGENTS))
+        self.assertIn("Codex", app.data)
+        app.set_agent("Claude Code")
+
     @unittest.skipUnless(plat.WIN, "the one synthetic click is only checked on Windows")
     def test_03f_clicking_the_star_icon_stars_the_skill_without_copying_its_name(self):
         app = self.app

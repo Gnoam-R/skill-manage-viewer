@@ -185,6 +185,17 @@ class Lifecycle(unittest.TestCase):
         self.assertIn("$names  = 'a','c'\n", m.UPDATER.read_text(encoding="utf-8"))
         self.assertFalse(m.forget_in_updater("zzz"))
 
+    def test_shown_agents_follow_what_is_installed_until_the_user_picks(self):
+        t = self.tmp
+        m.AGENT_DIRS = {"Claude Code": t / "cc/skills", "Codex": t / "cx/skills", "Antigravity": t / "ag/skills"}
+        self.assertEqual(m.chosen_agents(), list(m.AGENT_DIRS))  # nothing found: show everything rather than an empty panel
+        (t / "cc").mkdir()
+        self.assertEqual((m.detected_agents(), m.chosen_agents()), (["Claude Code"], ["Claude Code"]))  # only Claude Code installed
+        m.save_setting("agents", ["Antigravity", "Claude Code", "bogus"])
+        self.assertEqual(m.chosen_agents(), ["Claude Code", "Antigravity"])  # the pick wins, in the fixed tab order
+        m.save_setting("agents", [])
+        self.assertEqual(m.chosen_agents(), ["Claude Code"])  # an empty or stale pick falls back to detection
+
 
 if __name__ == "__main__":
     unittest.main()

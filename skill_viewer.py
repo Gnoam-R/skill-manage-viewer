@@ -299,12 +299,13 @@ class App:
         self.icons: dict[str, list[tk.Label]] = {}  # the ☆/★ labels on screen for each skill name (it can be in two groups)
         self.updatable: set[Path] = set()
         self.data: dict[str, list[dict]] = {}
-        self.agent = tk.StringVar(value=AGENTS[0])
+        self.agents = mgr.chosen_agents()  # tabs shown; set in the settings dialog
+        self.agent = tk.StringVar(value=self.agents[0])
         self.query = tk.StringVar()
         self.events: queue.Queue = queue.Queue()
         self.tray = None
         self.tray_proc: subprocess.Popen | None = None
-        self.dialog: AddDialog | None = None
+        self.dialog: AddDialog | SettingsDialog | None = None
         self.detail_win: DetailDialog | None = None
         self.popup: Popup | None = None
         self._last_toggle = 0.0
@@ -456,12 +457,13 @@ class App:
         for text, cmd, hint in (("＋ 추가", self.add_dialog, "스킬 추가 (링크로 설치 · 새로 만들기)"),
                                 ("⇧ 업데이트", lambda: self.check_updates(), "git으로 받은 스킬의 업데이트 확인"),
                                 ("⟳", self.load, "목록 새로고침"),
+                                ("⚙", self.settings_dialog, "설정 (표시할 에이전트)"),
                                 ("라이트" if self.theme == "dark" else "다크", self.toggle_theme, "밝은/어두운 화면 전환"),
                                 ("⇄", self.move, "창 위치 전환 (우상단 ↔ 좌하단)"),
                                 ("–", self.hide, "트레이로 숨기기")):
             self._icon_button(actions, text, cmd, hint).pack(side="left")
 
-        self.tabs, self._restyle_tabs = self._tab_bar(self.root, AGENTS, self.set_agent)
+        self.tabs, self._restyle_tabs = self._tab_bar(self.root, self.agents, self.set_agent)
         self.tabs.pack(fill="x")
         tk.Frame(self.root, height=1, bg=c["line"]).pack(fill="x")
 
@@ -541,7 +543,7 @@ class App:
     # ---- list -------------------------------------------------------------------------------
     def load(self) -> None:
         mgr.version.cache_clear()
-        data = {a: collect(a) for a in AGENTS}
+        data = {a: collect(a) for a in self.agents}
         if data != self.data:  # rescanning is cheap; redrawing is not, and would also reset what the user is reading
             self.data = data
             self.render()
@@ -566,7 +568,7 @@ class App:
         if self.cat not in counts and self.cat != STAR:  # the picked category vanished (search or refresh)
             self.cat = None
         self.shown = starred if self.cat == STAR else [s for s in found if self.cat in (None, s["cat"])]
-        self._restyle_tabs(agent, {a: f"{a}  {len(self.data.get(a, []))}" for a in AGENTS})
+        self._restyle_tabs(agent, {a: f"{a}  {len(self.data.get(a, []))}" for a in self.agents})
         self.subtitle.config(text=f"{agent}에서 사용할 수 있는 스킬")
         self._draw_rail(counts, len(found), len(starred))
         self.count.config(text=f"{len(self.shown)}개 스킬" + (f" · '{q}' 검색 결과" if q else ""))
@@ -864,9 +866,32 @@ class App:
         if not self.visible:
             self.show()
         if self.dialog and self.dialog.win.winfo_exists():
-            self.dialog.win.lift()
-            return
+            if isinstance(self.dialog, AddDialog):
+                self.dialog.win.lift()
+                return
+            self.dialog.close()
         self.dialog = AddDialog(self)
+
+    def settings_dialog(self) -> None:
+        if not self.visible:
+            self.show()
+        if self.dialog and self.dialog.win.winfo_exists():
+            self.dialog.close()  # one side dialog at a time
+        self.dialog = SettingsDialog(self)
+
+    def set_agents(self, agents: list[str]) -> None:
+        """Show only these agent tabs (kept in AGENT_DIRS order) and rebuild the panel around them."""
+        self.agents = [a for a in AGENTS if a in agents] or self.agents
+        mgr.save_setting("agents", self.agents)
+        if self.agent.get() not in self.agents:
+            self.agent.set(self.agents[0])
+            self.cat = None
+        self.data = {}
+        for w in self.root.winfo_children():
+            if not isinstance(w, tk.Toplevel):  # keep the open dialog (the one that called this)
+                w.destroy()
+        self._build()
+        self.load()
 
     def place(self) -> None:
         left, top, right, bottom = plat.work_area(self.root)
@@ -963,7 +988,7 @@ class AddDialog:
         self.win = win = app._side_window("스킬 추가", self.W, self.H)
         self.mode = "link"
         self.picks: dict[Path, tk.BooleanVar] = {}
-        self.agents = {a: tk.BooleanVar(value=True) for a in AGENTS}
+        self.agents = {a: tk.BooleanVar(value=True) for a in app.agents}
         bar, self._restyle = app._tab_bar(win, ["링크로 설치", "새로 만들기"], self.show)
         bar.pack(fill="x")
         tk.Frame(win, height=1, bg=c["line"]).pack(fill="x")
@@ -1129,6 +1154,44 @@ class AddDialog:
         self.say(f"만들었습니다: {d}\n편집기에서 SKILL.md 본문을 채워 주세요.")
         self.app.load()
         mgr.open_in_editor(d / "SKILL.md")
+
+
+class SettingsDialog:
+    """Which agents the panel shows. Applies on every click; at least one stays on."""
+    W, H = 460, 290
+
+    def __init__(self, app: App):
+        self.app, c = app, app.c
+        self.win = win = app._side_window("설정", self.W, self.H)
+        win.protocol("WM_DELETE_WINDOW", self.close)
+        win.bind("<Escape>", lambda e: self.close())
+        app._label(win, "표시할 에이전트", 13, bold=True, bg=c["bg"]).pack(anchor="w", padx=18, pady=(18, 2))
+        app._label(win, "이 PC에 설치한 에이전트만 고르세요. 고르지 않은 에이전트의 탭과 목록은 보이지 않습니다.", 10,
+                   fg=c["muted"], bg=c["bg"], wraplength=app.px(self.W - 40), justify="left").pack(anchor="w", padx=18)
+        found = mgr.detected_agents()
+        self.vars = {a: tk.BooleanVar(value=a in app.agents) for a in AGENTS}
+        for a, var in self.vars.items():
+            row = tk.Frame(win, bg=c["bg"])
+            row.pack(fill="x", padx=18, pady=(12, 0))
+            app._check(row, a, var).pack(side="left")
+            app._label(row, "이 PC에서 발견됨" if a in found else "발견되지 않음", 10,
+                       fg=c["muted"], bg=c["bg"]).pack(side="left", padx=8)
+            var.trace_add("write", lambda *_, a=a: self.changed(a))
+        self.status = app._label(win, "", 10, fg=c["muted"], bg=c["bg"])
+        self.status.pack(anchor="w", padx=18, pady=(16, 0))
+
+    def changed(self, name: str) -> None:
+        picked = [a for a, v in self.vars.items() if v.get()]
+        if not picked:  # an empty panel has nothing to show: undo the last click
+            self.vars[name].set(True)
+            self.status.config(text="하나 이상은 선택해야 합니다.", fg=self.app.c["warn_fg"])
+            return
+        self.status.config(text="", fg=self.app.c["muted"])
+        if picked != self.app.agents:
+            self.app.set_agents(picked)
+
+    def close(self) -> None:
+        self.win.destroy()
 
 
 class Popup:
