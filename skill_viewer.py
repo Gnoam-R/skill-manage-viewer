@@ -293,6 +293,7 @@ class Scroll:
 
 class App:
     W, H, RAIL = 900, 784, 230  # tall enough at 100% scaling for the whole rail: three fixed entries, ten categories, and 정리 후보 last
+    INSTANCE = plat.INSTANCE  # whose "show yourself" notes this copy reads; tests use their own so they never touch a real app
 
     def __init__(self, with_tray: bool = True, auto_update: bool = True):
         plat.dpi_aware()
@@ -1255,6 +1256,8 @@ class App:
                 item()
             elif item in TRAY_COMMANDS:
                 getattr(self, item)()
+        if plat.take_show_request(self.INSTANCE):  # the user started the app again while it was hidden in the tray
+            self.show()
         self.root.after(100, self._pump)
 
     def _tick(self) -> None:
@@ -1835,3 +1838,5 @@ if __name__ == "__main__":
         make_icns(HERE / "skill_viewer.icns")
     elif not plat.already_running():
         App().run(hidden="--hidden" in sys.argv)
+    elif "--hidden" not in sys.argv:  # started by hand while a copy is already up (maybe in the tray): bring its window forward
+        plat.ask_running_copy_to_show()
