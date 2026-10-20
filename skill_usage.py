@@ -62,6 +62,12 @@ def scan_file(path: Path) -> list[list[str]]:
 def monthly_counts(projects: Path, cache_file: Path) -> dict[str, Counter]:
     """{'2026-10': Counter({'tdd': 3, ...}), ..., ALL: Counter(...)}. Built-in commands like /clear are counted too;
     the caller keeps only names that are skills."""
+    return scan_logs(projects, cache_file)[0]
+
+
+def scan_logs(projects: Path, cache_file: Path) -> tuple[dict[str, Counter], datetime | None]:
+    """monthly_counts, plus how far back the logs are known to reach: the oldest modification time of a log file
+    (None without logs). A file is touched after its first line, so this errs towards 'the logs start later than they do'."""
     try:
         cache = json.loads(cache_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -90,7 +96,8 @@ def monthly_counts(projects: Path, cache_file: Path) -> dict[str, Counter]:
             seen.add(event_id)
             counts[month][skill] += 1
             counts[ALL][skill] += 1
-    return dict(counts)
+    oldest = min((e["mtime"] for e in fresh.values()), default=None)
+    return dict(counts), datetime.fromtimestamp(oldest) if oldest is not None else None
 
 
 def count_for(counter: Counter, name: str) -> int:
@@ -98,3 +105,27 @@ def count_for(counter: Counter, name: str) -> int:
     ('anthropic-skills:pdf' for 'pdf') or without one ('brainstorming' for 'superpowers:brainstorming')."""
     short = name.split(":")[-1]
     return sum(n for logged, n in counter.items() if logged == name or logged.split(":")[-1] == short)
+
+
+IDLE_MONTHS = 2  # cleanup candidates: skills not called this month or last month (counted in whole months, like the rest of this file)
+
+
+def recent_months(now: datetime, n: int = IDLE_MONTHS) -> list[str]:
+    """['2026-10', '2026-09']: the current month and the ones before it, newest first."""
+    first = now.year * 12 + now.month - 1
+    return [f"{(first - i) // 12}-{(first - i) % 12 + 1:02d}" for i in range(n)]
+
+
+def last_used(counts: dict[str, Counter], name: str) -> str | None:
+    """The latest 'YYYY-MM' in which the logs show a call of this skill, or None if they never do."""
+    return max((m for m, c in counts.items() if m != ALL and count_for(c, name)), default=None)
+
+
+def idle_since(counts: dict[str, Counter], names: list[str], now: datetime, n: int = IDLE_MONTHS) -> dict[str, str | None]:
+    """{skill: its last month in the logs, or None} for every name not called in the last n months. Empty when the logs
+    hold no skill call at all: then every skill would look idle and the list would only be a trap."""
+    if not any(m != ALL for m in counts):
+        return {}
+    oldest = recent_months(now, n)[-1]
+    last = {name: last_used(counts, name) for name in names}
+    return {name: m for name, m in last.items() if m is None or m < oldest}

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from functools import cache
 from pathlib import Path
 from urllib.parse import urlparse
@@ -63,6 +64,15 @@ def is_link(p: Path) -> bool:
 
 def target_of(p: Path) -> Path:
     return Path(os.path.realpath(p))
+
+
+def installed_on(p: Path) -> datetime | None:
+    """When this skill folder, or the link to it, was created here (None if the file system can't say).
+    A link is not followed: its own date is the day the skill was installed, not the day the original was written."""
+    try:
+        return datetime.fromtimestamp(os.lstat(p).st_birthtime)
+    except (OSError, AttributeError):
+        return None
 
 
 def parse(path: Path) -> dict:
