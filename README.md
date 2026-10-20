@@ -223,6 +223,12 @@ python install.py --uninstall   # 위에서 만든 것 지우기 (이 스크립�
 
 ![상세 보기](docs/images/detail.png)
 
+**SKILL.md 탭**은 제목·목록·코드가 보기 좋게 정리된 문서로 보입니다. `수정`을 누르면 수정 양식이 열립니다.
+
+![SKILL.md 보기](docs/images/skill-md-view.png)
+
+![SKILL.md 수정 양식](docs/images/skill-md-edit.png)
+
 ### 자주 쓰는 스킬
 
 스킬 이름 앞의 **☆**를 누르면 **★**로 바뀌어 자주 쓰는 스킬로 지정됩니다. 다시 누르면 해제됩니다. `⋯` 메뉴의 `★ 자주 쓰는 스킬에 추가`/`해제`로도 같은 일을 합니다.
@@ -354,6 +360,8 @@ https://gitlab.example.com/group/repo/-/tree/dev/x    GitLab 링크도 같은 �
 | Claude Code | `~/.claude/skills`, 켜 둔 플러그인의 스킬. 환경변수 `CLAUDE_CONFIG_DIR`가 있으면 그 폴더 |
 | Codex | `~/.codex/skills` (시스템 스킬 `.system` 포함). 환경변수 `CODEX_HOME`이 있으면 그 폴더 |
 | Antigravity | `~/.gemini/config/skills`, Antigravity 내장 스킬 |
+
+![설정 창](docs/images/settings.png)
 
 - **보일 에이전트 고르기**: `⚙` → 표시할 에이전트에서 체크를 켜고 끕니다(바로 적용, 하나 이상은 남아야 함). 처음에는 이 PC에서 설정 폴더가 발견된 에이전트만 보이고(예: Claude Code만 설치했다면 그 탭 하나), 하나도 발견되지 않으면 모두 보입니다. 끈 에이전트는 탭·목록·`＋ 추가`의 설치 대상에서 빠집니다.
 - 설치되지 않은 에이전트를 켜 두면 "설치된 스킬이 없습니다"로만 표시되고 다른 탭에는 영향이 없습니다.
