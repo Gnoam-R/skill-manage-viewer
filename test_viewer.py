@@ -12,6 +12,7 @@ import tempfile
 import time
 import tkinter as tk
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import font as tkfont
 from unittest import mock
@@ -21,6 +22,7 @@ from PIL import ImageGrab
 import install
 import platform_support as plat
 import skill_manager as mgr
+import skill_update as upd
 import skill_viewer as v
 
 SHOTS = Path(tempfile.gettempdir())
@@ -49,6 +51,11 @@ def open_menu(app, s, x, y):
     app.root.update()
 
 
+def usage_line(tid: str, skill: str, when) -> str:
+    block = {"type": "tool_use", "id": tid, "name": "Skill", "input": {"skill": skill}}
+    return json.dumps({"type": "assistant", "timestamp": when.isoformat(), "message": {"content": [block]}}, separators=(",", ":"))
+
+
 def find(app: v.App, agent: str, name: str) -> dict | None:
     return next((s for s in app.data[agent] if s["name"] == name), None)
 
@@ -62,6 +69,7 @@ class PanelTest(unittest.TestCase):
             mock.patch.object(mgr, "STORE", t / "store"),
             mock.patch.object(mgr, "AGENT_DIRS", {"Claude Code": t / "claude", "Codex": t / "codex", "Antigravity": t / "agy"}),
             mock.patch.object(mgr, "UPDATER", t / "updater.ps1"),
+            mock.patch.object(mgr, "CLAUDE_HOME", t / "claudehome"),  # no real plugins, and the usage logs below
             mock.patch.object(mgr, "open_in_editor"),
         ]
         for p in cls._patches:
@@ -70,6 +78,18 @@ class PanelTest(unittest.TestCase):
         # so the Claude tab has several categories and a read-only skill even on a clean CI machine without plugins
         write_skill(t / "claude/tdd")
         write_skill(t / "claude/synced/app/grilling")  # nested = synced by the desktop app = view only
+        # Claude Code logs: tdd 3x and gitskill 1x this month, tdd 1x last month, plus a built-in command
+        now = datetime.now().astimezone()
+        cls.this_month, last = now.strftime("%Y-%m"), now.replace(day=1) - timedelta(days=2)
+        cls.last_month = last.strftime("%Y-%m")
+        lines = [usage_line(f"t{i}", "tdd", now) for i in range(3)] + [usage_line("g1", "gitskill", now), usage_line("old", "tdd", last)]
+        lines.append(
+            json.dumps(
+                {"type": "user", "timestamp": now.isoformat(), "uuid": "u1", "message": {"content": "<command-name>/clear</command-name>"}}
+            )
+        )
+        (t / "claudehome/projects/p").mkdir(parents=True)
+        (t / "claudehome/projects/p/s.jsonl").write_text("".join(line + "\n" for line in lines), encoding="utf-8")
         cls.repo = t / "gitrepo"  # a git-backed skill linked into Claude Code
         write_skill(cls.repo / "skills/gitskill")
         git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
@@ -77,7 +97,7 @@ class PanelTest(unittest.TestCase):
         subprocess.run([*git, "add", "-A"], cwd=cls.repo, check=True, capture_output=True)
         subprocess.run([*git, "commit", "-qm", "init"], cwd=cls.repo, check=True, capture_output=True)
         mgr.install([cls.repo / "skills/gitskill"], ["Claude Code"])
-        cls.app = v.App(with_tray=plat.WIN)  # the macOS tray is a child process; CI has no menu bar to show it in
+        cls.app = v.App(with_tray=plat.WIN, auto_update=False)  # the macOS tray is a child process; CI has no menu bar to show it in
         cls.app.root.update()
 
     @classmethod
@@ -267,7 +287,8 @@ class PanelTest(unittest.TestCase):
         app.set_agent("Claude Code")
         app.query.set("")
         names = texts(app.rail)
-        self.assertEqual((names[1], names[3]), (v.STAR, "전체"))  # the star entry sits above "전체", and shows at 0
+        # the star entry is first and shows at 0; on the Claude Code tab the usage entry sits between it and "전체"
+        self.assertEqual((names[1], names[3], names[5]), (v.STAR, v.USAGE, "전체"))
         self.assertEqual(names[2], "0")
         gs = find(app, "Claude Code", "gitskill")
         self.assertIn("★ 자주 쓰는 스킬에 추가", [label for label, _, _ in app.menu_items(gs)])
@@ -339,6 +360,97 @@ class PanelTest(unittest.TestCase):
         icon.event_generate("<Button-1>", x=2, y=2)  # a second click takes it back
         self.assertEqual(icon.cget("text"), "☆")
 
+    def test_03g_most_used_skills_by_month(self):
+        app = self.app
+        app.set_agent("Claude Code")
+        app.pick(v.USAGE)
+        self.settle(lambda: app.usage is not None)
+        self.assertEqual([s["name"] for s in app.shown], ["tdd", "gitskill"])  # most called first; /clear is not a skill
+        self.assertEqual((app.calls["tdd"], app.calls["gitskill"]), (3, 1))
+        shown = texts(app.body)
+        self.assertIn("3회", shown)
+        self.assertIn(v.month_label(self.this_month), shown)  # the month picker
+        rail = texts(app.rail)
+        self.assertEqual(rail[rail.index(v.USAGE) + 1], "2")  # two skills were used this month
+        self.shot(app.root, "t3g_usage")
+        bad = low_contrast(app, app.root, "usage light")
+        app.set_usage_month(self.last_month)
+        self.assertEqual([(s["name"], app.calls[s["name"]]) for s in app.shown], [("tdd", 1)])
+        app.set_usage_month(v.usage.ALL)
+        self.assertEqual(app.calls["tdd"], 4)
+        app.toggle_theme()
+        app.pick(v.USAGE)
+        self.settle(lambda: app.shown)
+        bad += low_contrast(app, app.root, "usage dark")
+        app.toggle_theme()
+        self.assertEqual(bad, [])
+        app.set_usage_month(self.this_month)
+        app.set_agent("Codex")  # only Claude Code's logs are read, so other agents have no such entry
+        self.assertNotIn(v.USAGE, texts(app.rail))
+        self.assertIsNone(app.cat)
+        app.set_agent("Claude Code")
+    def test_03h_app_updates_itself_and_restarts_without_surprises(self):
+        app = self.app
+        done = upd.Result("updated", "", "aaa1111", "bbb2222", ["Feat: 새 기능"])
+        with (
+            mock.patch.object(upd, "apply", return_value=done),
+            mock.patch.object(upd, "restart") as restart,
+            mock.patch.object(app, "quit") as quit_,
+        ):
+            self.assertFalse(app.pending_restart)
+            app.auto_update(manual=True)
+            self.settle(lambda: app.pending_restart)
+            self.assertIn("새 버전 · 다시 시작", texts(app.actions))  # the header pill
+            restart.assert_not_called()  # the window is open: the user decides when to restart
+            app.toggle_theme()  # the header is rebuilt, the pill must survive
+            self.assertIn("새 버전 · 다시 시작", texts(app.actions))
+            app.toggle_theme()
+            app.root.update()  # a widget that isn't mapped yet ignores events
+            pill = next(w for w in walk(app.actions) if isinstance(w, tk.Label) and w.cget("text") == "새 버전 · 다시 시작")
+            pill.event_generate("<Button-1>", x=2, y=2)
+            app.root.update()
+            restart.assert_called_once_with(hidden=False)
+            quit_.assert_called_once()
+            with mock.patch.object(upd, "apply") as again:  # an update is already on disk: no second check
+                app.auto_update()
+                app.auto_update(manual=True)
+                again.assert_not_called()
+            restart.reset_mock()
+            app.hide()  # nobody is looking: switch right away, and start hidden again
+            app._update_done(done)
+            restart.assert_called_once_with(hidden=True)
+            app.show()
+        app.pending_restart = None
+        if app.restart_pill:
+            app.restart_pill.destroy()
+            app.restart_pill = None
+
+    def test_03i_update_messages_and_the_on_off_switch(self):
+        app = self.app
+        with mock.patch.object(upd, "apply", return_value=upd.Result("up-to-date", "", "a", "a")) as apply:
+            app.auto_update()  # automatic and nothing new: silent
+            self.settle(lambda: apply.called)
+            self.assertNotIn("최신", app.footer.cget("text"))
+            app.auto_update(manual=True)
+            self.settle(lambda: apply.call_count == 2 and "최신" in app.footer.cget("text"))
+        failed = upd.Result("failed", "새 버전을 확인하는 중 실패해 이전 버전으로 되돌렸습니다: x", "a", "c")
+        app._update_done(failed)
+        self.assertIn("되돌렸습니다", app.footer.cget("text"))
+        app.footer.config(text="")
+        app._update_done(failed)  # the same broken version is not reported again every few hours
+        self.assertEqual(app.footer.cget("text"), "")
+        app._update_done(failed, manual=True)  # unless the user asked
+        self.assertIn("되돌렸습니다", app.footer.cget("text"))
+        self.assertTrue(mgr.load_settings().get("auto_update", True))
+        app.toggle_auto_update()
+        self.assertFalse(mgr.load_settings()["auto_update"])
+        with mock.patch.object(upd, "apply") as off:
+            app.auto_update()
+            app.root.update()
+            off.assert_not_called()  # switched off: the automatic check does nothing
+        app.toggle_auto_update()
+        self.assertTrue(mgr.load_settings()["auto_update"])
+
     def test_04_menu_entries(self):
         app = self.app
 
@@ -348,7 +460,7 @@ class PanelTest(unittest.TestCase):
         legacy = labels(find(app, "Codex", "legacy"))
         self.assertEqual(legacy[0], "상세 보기")
         self.assertIn("삭제…", legacy)
-        self.assertIn("SKILL.md 열어서 수정", legacy)
+        self.assertIn("SKILL.md 수정…", legacy)
         self.assertIn("이 스킬의 저장소 업데이트 확인", labels(find(app, "Claude Code", "gitskill")))
         ro = next(s for s in app.data["Claude Code"] if not s["managed"])
         self.assertNotIn("삭제…", labels(ro))  # plugin / app-synced skills can't be deleted from here
@@ -381,8 +493,10 @@ class PanelTest(unittest.TestCase):
         for expected in ("gitskill", "저장소", "버전", "설치된 에이전트", "위치", "SKILL.md", "삭제…", "업데이트 확인"):
             self.assertTrue(any(expected in t for t in shown), expected)
         self.assertTrue(any(t.startswith("git · ") for t in shown))
+        d.show_page("SKILL.md")
         self.assertIn("description: does a thing", d.text.get("1.0", "end"))
-        self.assertEqual(str(d.text.cget("state")), "disabled")  # a viewer, not an editor
+        self.assertEqual(str(d.text.cget("state")), "disabled")  # a viewer until 수정 is pressed
+        d.show_page("정보")
         with mock.patch.object(v.plat, "open_folder") as opened:
             next(w for w in walk(d.win) if isinstance(w, tk.Label) and w.cget("text") == "폴더 열기").event_generate("<Button-1>")
         opened.assert_called_once()
@@ -397,6 +511,112 @@ class PanelTest(unittest.TestCase):
         self.assertFalse(d.win.winfo_exists())  # one detail window at a time
         self.assertNotIn("삭제…", texts(app.detail_win.win))
         app.detail_win.close()
+
+    def test_04d_skill_md_view_is_rendered_and_the_edit_form_saves(self):
+        app = self.app
+        legacy = find(app, "Codex", "legacy")
+        path = legacy["path"]
+        (path / "SKILL.md").write_text(
+            "---\nname: legacy\ndescription: does a thing\nallowed-tools: Read\n---\n"
+            "# Heading\n\nSome **bold** text and `code`.\n\n- first item\n- second item\n\n```\nprint('x')\n```\n",
+            encoding="utf-8",
+        )
+        app.load()
+        app.detail(find(app, "Codex", "legacy"), page="SKILL.md")
+        app.root.update()
+        d = app.detail_win
+        # readable view: headings, bullets, code blocks and inline code get their own tags; the file is hidden behind them
+        t = d.text
+        shown = t.get("1.0", "end")
+        self.assertIn("•  first item", shown)
+        self.assertNotIn("**bold**", shown)
+        self.assertNotIn("`code`", shown)
+        self.assertTrue(t.tag_ranges("h1") and t.tag_ranges("bold") and t.tag_ranges("inline") and t.tag_ranges("code"))
+        self.assertTrue(t.tag_ranges("meta"))  # the front matter, muted
+        self.assertEqual(str(t.cget("state")), "disabled")
+        # no tag may be italic (the app never is)
+        for tag in ("h1", "h2", "h3", "bold", "code", "inline", "meta", "bullet", "quote"):
+            font = t.tag_cget(tag, "font")
+            if font:
+                self.assertEqual(tkfont.Font(root=app.root, font=font).actual("slant"), "roman", tag)
+        self.shot(d.win, "t4d_skill_md_view")
+
+        # a click on 수정 opens the form with the file's current values
+        with mock.patch.object(v.messagebox, "askokcancel", return_value=True):
+            d.edit_btn.event_generate("<Button-1>", x=2, y=2)
+            app.root.update()
+        self.assertTrue(d.editing)
+        self.assertEqual(d.desc_text.get("1.0", "end").strip(), "does a thing")
+        self.assertFalse(d.manual_var.get())
+        self.assertIn("# Heading", d.body_text.get("1.0", "end"))
+        self.assertFalse(d.dirty())
+        self.shot(d.win, "t4d_skill_md_edit")
+
+        # edit, then 저장: the file changes, other keys survive, the old file is backed up, the list follows
+        d.desc_text.delete("1.0", "end")
+        d.desc_text.insert("1.0", "새로 쓴 설명")
+        d.manual_var.set(True)
+        d.body_text.insert("end", "\nAdded line.")
+        self.assertTrue(d.dirty())
+        trash_before = len(list((mgr.STORE / "trash").glob("*_SKILL.md"))) if (mgr.STORE / "trash").exists() else 0
+        d.save()
+        app.root.update()
+        out = (path / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn('description: "새로 쓴 설명"', out)
+        self.assertIn("allowed-tools: Read", out)
+        self.assertIn("disable-model-invocation: true", out)
+        self.assertIn("Added line.", out)
+        self.assertEqual(len(list((mgr.STORE / "trash").glob("*_SKILL.md"))), trash_before + 1)
+        fresh = find(app, "Codex", "legacy")
+        self.assertEqual((fresh["desc"], fresh["manual"]), ("새로 쓴 설명", True))
+        d2 = app.detail_win
+        self.assertIsNot(d2, d)
+        self.assertEqual((d2.page, d2.editing), ("SKILL.md", False))  # reopened on the fresh data, in read mode
+        self.assertIn("수동", texts(d2.win))  # the manual badge appeared
+
+        # validation: an empty description is refused and the file is left alone
+        with mock.patch.object(v.messagebox, "askokcancel", return_value=True):
+            d2.begin_edit()
+        before = (path / "SKILL.md").read_bytes()
+        d2.desc_text.delete("1.0", "end")
+        d2.save()
+        self.assertIn("설명", d2.status.cget("text"))
+        self.assertEqual((path / "SKILL.md").read_bytes(), before)
+
+        # unsaved edits are not thrown away silently: cancel, tab switch and close all ask first
+        d2.desc_text.insert("1.0", "temporary")
+        with mock.patch.object(v.messagebox, "askyesno", return_value=False) as ask:
+            d2.cancel()
+            d2.show_page("정보")
+            d2.close()
+            self.assertEqual(ask.call_count, 3)
+        self.assertTrue(d2.editing and d2.win.winfo_exists() and d2.page == "SKILL.md")
+        with mock.patch.object(v.messagebox, "askyesno", return_value=True):
+            d2.cancel()  # confirmed: back to the read-only view, nothing written
+        self.assertEqual((d2.editing, d2.page), (False, "SKILL.md"))
+        self.assertEqual((path / "SKILL.md").read_bytes(), before)
+        d2.close()
+
+    def test_04e_edit_form_respects_who_owns_the_skill(self):
+        app = self.app
+        ro = next(s for s in app.data["Claude Code"] if not s["managed"])  # plugin / app-synced: view only
+        app.detail(ro, page="SKILL.md")
+        app.root.update()
+        self.assertFalse(hasattr(app.detail_win, "edit_btn"))
+        app.detail_win.begin_edit()
+        self.assertFalse(app.detail_win.editing)
+        app.detail_win.close()
+        gs = find(app, "Claude Code", "gitskill")  # linked into a git clone: ask before touching the clone's file
+        app.detail(gs, page="SKILL.md")
+        with mock.patch.object(v.messagebox, "askokcancel", return_value=False) as ask:
+            app.detail_win.begin_edit()
+            ask.assert_called_once()
+            self.assertIn("git", ask.call_args[0][1])
+        self.assertFalse(app.detail_win.editing)
+        app.detail_win.close()
+        labels = [label for label, _, _ in app.menu_items(find(app, "Codex", "legacy"))]
+        self.assertIn("SKILL.md 수정…", labels)
+        self.assertIn("SKILL.md 보기", [label for label, _, _ in app.menu_items(ro)])
 
     def test_04c_themed_checkbox(self):
         app = self.app
@@ -761,8 +981,8 @@ class CategoryTest(unittest.TestCase):
         self.assertTrue(all(c["about"] for c in v.CATALOG))
 
     def test_listed_skills_ignore_keyword_guesses(self):
-        # 'review' would otherwise pull ui-audit into 리뷰·품질; the list wins, with or without a plugin prefix
-        self.assertEqual(v.categorize("ui-audit", "audit the UI"), "UI·디자인")
+        # the 'ponytail' keyword would otherwise file ponytail-gain under 개발·테스트; the list wins, with or without a plugin prefix
+        self.assertEqual(v.categorize("ponytail-gain", ""), "리뷰·품질")
         self.assertEqual(v.categorize("superpowers:requesting-code-review", ""), "리뷰·품질")
         self.assertEqual(v.categorize("zz-helper", "Review pull requests for bugs"), "리뷰·품질")  # unknown: keywords
         self.assertEqual(v.categorize("zzz", "nothing matches here"), v.OTHER)

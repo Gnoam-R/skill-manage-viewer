@@ -366,3 +366,77 @@ def chosen_agents() -> list[str]:
 
 def open_in_editor(path: Path) -> None:
     plat.open_path(path)
+
+
+# ---- editing SKILL.md ----------------------------------------------------------------------------
+def split_skill_md(text: str) -> tuple[str, str]:
+    """(front matter without its --- lines, body). ('', text) when the file has no front matter."""
+    m = re.match(r"---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", text, re.S)
+    return (m[1], text[m.end():]) if m else ("", text)
+
+
+def _description_lines(description: str) -> list[str]:
+    one_line = " ".join(description.split())
+    if re.search(r'["\]|^[>|&*!%@`#-]', one_line):  # YAML would need escapes: use a folded block instead
+        return ["description: >-", f"  {one_line}"]
+    return [f'description: "{one_line}"']
+
+
+def set_front_values(front: str, description: str, manual: bool) -> str:
+    """Front matter text with `description` and `disable-model-invocation` replaced; every other line stays exactly as it was."""
+    out: list[str] = []
+    lines = front.split("\n") if front else []
+    i, seen_desc, seen_manual = 0, False, False
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        if re.match(r"description\s*:", line):
+            seen_desc = True
+            while i < len(lines) and lines[i].startswith((" ", "\t")):  # the old value's continuation lines
+                i += 1
+            out += _description_lines(description)
+        elif re.match(r"disable-model-invocation\s*:", line):
+            seen_manual = True
+            if manual:
+                out.append("disable-model-invocation: true")
+        else:
+            out.append(line)
+    if not seen_desc:
+        out += _description_lines(description)
+    if manual and not seen_manual:
+        out.append("disable-model-invocation: true")
+    return "\n".join(out)
+
+
+def read_skill_md(skill_dir: Path) -> tuple[str, bool, str]:
+    """(description, manual-only, body) as the edit form shows them."""
+    path = skill_dir / "SKILL.md"
+    info = parse(path)
+    return info["desc"], info["manual"], split_skill_md(path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n"))[1]
+
+
+def save_skill_md(skill_dir: Path, description: str, manual: bool, body: str) -> Path | None:
+    """Write the edited SKILL.md. The old file is first copied into the trash folder, so nothing is ever lost.
+    -> that backup, or None when nothing changed."""
+    description = " ".join(description.split())
+    if not description:
+        raise ManagerError("설명은 비워 둘 수 없습니다 (에이전트가 이 스킬을 언제 쓸지 판단하는 문장입니다)")
+    path = skill_dir / "SKILL.md"
+    raw = path.read_bytes().decode("utf-8", errors="replace") if path.exists() else ""
+    eol = "\r\n" if "\r\n" in raw else "\n"  # keep the file's own line endings: a LF file must not turn CRLF in git
+    front, _ = split_skill_md(raw.replace("\r\n", "\n"))
+    new_front = set_front_values(front or f"name: {skill_dir.name}", description, manual)
+    text = f"---\n{new_front}\n---\n{body.rstrip(chr(10))}\n".replace("\n", eol)
+    if len(text) > 1_000_000:
+        raise ManagerError("SKILL.md가 너무 큽니다 (1MB 이하)")
+    if text == raw:
+        return None
+    backup = None
+    if raw:
+        backup = STORE / "trash" / f"{time.strftime('%Y%m%d-%H%M%S')}_{skill_dir.parent.name}_{skill_dir.name}_SKILL.md"
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, backup)
+    tmp = path.with_name("SKILL.md.tmp")
+    tmp.write_bytes(text.encode("utf-8"))
+    os.replace(tmp, path)  # a crash can't leave half a file
+    return backup

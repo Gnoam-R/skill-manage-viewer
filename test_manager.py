@@ -172,6 +172,65 @@ class Lifecycle(unittest.TestCase):
             m.create("taken", "", ["Codex"])
         self.assertFalse((m.STORE / "skills/taken").exists())  # no orphan template left behind
 
+    # ---- editing SKILL.md ---------------------------------------------------------------------
+    def skill_file(self, text: str, newline: str = "\n") -> Path:
+        d = m.AGENT_DIRS["Codex"] / "editme"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_bytes(text.replace("\n", newline).encode("utf-8"))
+        return d
+
+    def test_edit_keeps_every_other_line_and_changes_only_what_was_edited(self):
+        d = self.skill_file(
+            '---\nname: editme\ndescription: "old text"\nallowed-tools: Read, Grep\nmetadata:\n  owner: me\n---\n\n# Title\n\nBody line.\n'
+        )
+        backup = m.save_skill_md(d, "새 설명 (한글)", True, "# Title\n\nNew body.\n\n\n")
+        out = (d / "SKILL.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            out,
+            '---\nname: editme\ndescription: "새 설명 (한글)"\nallowed-tools: Read, Grep\nmetadata:\n  owner: me\n'
+            "disable-model-invocation: true\n---\n# Title\n\nNew body.\n",
+        )
+        self.assertEqual(m.read_skill_md(d), ("새 설명 (한글)", True, "# Title\n\nNew body.\n"))
+        self.assertIn("Body line.", backup.read_text(encoding="utf-8"))  # the old file is kept in the trash folder
+        self.assertEqual(backup.parent, m.STORE / "trash")
+        self.assertFalse((d / "SKILL.md.tmp").exists())
+
+    def test_manual_flag_is_added_and_removed(self):
+        d = self.skill_file("---\nname: editme\ndescription: x\ndisable-model-invocation: true\n---\nbody\n")
+        m.save_skill_md(d, "x", False, "body")
+        self.assertNotIn("disable-model-invocation", (d / "SKILL.md").read_text(encoding="utf-8"))
+        self.assertEqual(m.read_skill_md(d)[1], False)
+        m.save_skill_md(d, "x", True, "body")
+        self.assertEqual(m.read_skill_md(d)[1], True)
+
+    def test_description_with_quotes_or_a_block_scalar_round_trips(self):
+        d = self.skill_file("---\nname: editme\ndescription: >\n  first line\n  second line\nother: kept\n---\nbody\n")
+        self.assertEqual(m.read_skill_md(d)[0], "first line second line")
+        for text in ('say "hi" and C:\\path', "- starts with a dash", "multi\nline  text"):
+            m.save_skill_md(d, text, False, "body")
+            self.assertEqual(m.read_skill_md(d)[0], " ".join(text.split()), text)
+            self.assertIn("other: kept", (d / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_line_endings_of_the_file_are_kept(self):
+        for newline in ("\n", "\r\n"):
+            d = self.skill_file("---\nname: editme\ndescription: x\n---\nbody\n", newline)
+            m.save_skill_md(d, "changed", False, "new\nbody")
+            raw = (d / "SKILL.md").read_bytes().decode("utf-8")
+            self.assertEqual(raw.count("\r\n"), raw.count("\n") if newline == "\r\n" else 0, repr(newline))
+
+    def test_no_front_matter_gets_one_and_bad_input_is_refused(self):
+        d = self.skill_file("just a body, no front matter\n")
+        m.save_skill_md(d, "now described", False, "just a body, no front matter")
+        self.assertEqual(m.read_skill_md(d), ("now described", False, "just a body, no front matter\n"))
+        self.assertEqual(m.parse(d / "SKILL.md")["name"], "editme")
+        before = (d / "SKILL.md").read_bytes()
+        with self.assertRaises(m.ManagerError):
+            m.save_skill_md(d, "   ", False, "body")  # an empty description would make the skill useless
+        with self.assertRaises(m.ManagerError):
+            m.save_skill_md(d, "ok", False, "x" * 1_100_000)
+        self.assertEqual((d / "SKILL.md").read_bytes(), before)
+        self.assertIsNone(m.save_skill_md(d, "now described", False, "just a body, no front matter"))  # unchanged: no backup
+
     def test_notes_roundtrip(self):
         m.set_note("alpha", "  내 설명 ")
         self.assertEqual(m.load_notes(), {"alpha": "내 설명"})

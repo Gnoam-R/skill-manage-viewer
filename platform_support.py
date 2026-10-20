@@ -18,6 +18,7 @@ MAC = sys.platform == "darwin"
 NO_WINDOW = 0x08000000 if WIN else 0  # CREATE_NO_WINDOW: keep git from flashing a console under pythonw
 # Tk on macOS numbers the buttons differently: right = 2 (or ctrl+click), not 3.
 RIGHT_CLICK = ("<Button-2>", "<Control-Button-1>") if MAC else ("<Button-3>",)
+MONO_FONT = "Consolas" if WIN else "Menlo" if MAC else "TkFixedFont"  # source text and code
 FALLBACK_FONT = "Malgun Gothic" if WIN else "Apple SD Gothic Neo" if MAC else "TkDefaultFont"
 # Tk on macOS sizes fonts at 72 dpi (1pt = 1px) while Windows uses 96, so point sizes are scaled to look alike.
 FONT_SCALE = 4 / 3 if MAC else 1.0
@@ -146,3 +147,11 @@ def already_running(name: str = "skilldesk") -> bool:
         return True
     _lock_file = f
     return False
+
+
+def release_lock() -> None:
+    """Let go of the single-instance lock now (before starting the updated copy of the app)."""
+    global _lock_file
+    if _lock_file:
+        _lock_file.close()  # closing the file drops the OS lock
+        _lock_file = None
